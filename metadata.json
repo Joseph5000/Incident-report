@@ -1,6 +1,6 @@
 {
   "name": "ShieldReport - Tactical Incident System",
   "description": "Mobile police reporting system with EXIF-based geolocation extraction, offline data persistence, and reverse geocoding.",
-  "requestFramePermissions": ["camera", "geolocation"],
+  "requestFramePermissions": ["camera", "geolocation", "publickey-credentials-create", "publickey-credentials-get"],
   "majorCapabilities": ["photo_exif_extraction", "offline_storage", "reverse_geocoding"]
 }

@@ -17,6 +17,7 @@ export interface IncidentReport {
   tempId: string;
   type: string;
   description: string;
+  officerNotes?: string;
   location: LocationData;
   images: string[]; // Base64 or Blob URLs for preview
   signatures: { name: string; type: string; data: string }[];

@@ -5,7 +5,7 @@
 
 import React, { useRef, useState } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
-import { Trash2, Check, X, PenTool } from 'lucide-react';
+import { Trash2, Check, X, PenTool, AlertCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface SignaturePadProps {
@@ -17,15 +17,21 @@ interface SignaturePadProps {
 export default function SignaturePad({ onSave, onCancel, title = 'Party Signature' }: SignaturePadProps) {
   const sigPad = useRef<SignatureCanvas>(null);
   const [isEmpty, setIsEmpty] = useState(true);
+  const [showError, setShowError] = useState(false);
 
   const clear = () => {
     sigPad.current?.clear();
     setIsEmpty(true);
+    setShowError(false);
   };
 
   const save = () => {
-    if (sigPad.current?.isEmpty()) return;
-    // Use getCanvas() as a workaround for trim-canvas import issues in some environments
+    const empty = sigPad.current?.isEmpty() ?? true;
+    if (empty) {
+      setShowError(true);
+      return;
+    }
+    
     const canvas = sigPad.current?.getCanvas();
     if (canvas) {
       const data = canvas.toDataURL('image/png');
@@ -50,17 +56,29 @@ export default function SignaturePad({ onSave, onCancel, title = 'Party Signatur
           <PenTool size={10} /> Digital signature will be cryptographically linked to Case ID
         </div>
 
-        <div className="p-6">
-          <div className="border border-slate-200 bg-white rounded-2xl overflow-hidden touch-none h-64 shadow-inner">
+        <div className="p-6 space-y-4">
+          <div className={cn(
+            "border rounded-2xl overflow-hidden touch-none h-64 transition-all duration-300 relative",
+            showError ? "border-red-500 bg-red-50/10 shadow-[0_0_15px_rgba(239,68,68,0.1)]" : "border-slate-200 bg-white"
+          )}>
             <SignatureCanvas
               ref={sigPad}
-              onBegin={() => setIsEmpty(false)}
+              onBegin={() => {
+                setIsEmpty(false);
+                setShowError(false);
+              }}
               penColor="#0f172a"
               canvasProps={{
                 className: 'w-full h-full',
               }}
             />
           </div>
+          {showError && (
+            <div className="flex items-center gap-2 text-red-500 animate-in fade-in slide-in-from-top-1">
+              <AlertCircle size={14} />
+              <span className="text-[10px] font-black uppercase tracking-widest">Action Required: Signature cannot be blank</span>
+            </div>
+          )}
         </div>
 
         <div className="p-6 bg-slate-50 flex items-center gap-3">
@@ -72,11 +90,10 @@ export default function SignaturePad({ onSave, onCancel, title = 'Party Signatur
           </button>
           <button
             onClick={save}
-            disabled={isEmpty}
             className={cn(
               "flex-[2] py-3 px-4 rounded-xl font-bold uppercase tracking-widest text-[10px] flex items-center justify-center gap-2 transition-all shadow-lg",
               isEmpty 
-                ? "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none" 
+                ? "bg-slate-100 text-slate-400 shadow-none border border-slate-200" 
                 : "bg-blue-600 text-white shadow-blue-200 hover:bg-blue-700"
             )}
           >

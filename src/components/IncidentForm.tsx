@@ -11,7 +11,7 @@ import { format } from 'date-fns';
 import Map from './Map';
 import SignaturePad from './SignaturePad';
 import { reverseGeocode } from '../lib/geocoding';
-import { saveDraft } from '../lib/db';
+import { saveDraft, setFormDraft, getFormDraft, clearFormDraft } from '../lib/db';
 import { IncidentReport, LocationData } from '../types';
 import { cn } from '../lib/utils';
 
@@ -20,6 +20,7 @@ export default function IncidentForm() {
     tempId: crypto.randomUUID(),
     type: 'Vehicle Accident',
     description: '',
+    officerNotes: '',
     images: [],
     signatures: [],
     status: 'draft',
@@ -38,6 +39,27 @@ export default function IncidentForm() {
   const [signatureStep, setSignatureStep] = useState<'info' | 'pad'>('info');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load draft on mount
+  useEffect(() => {
+    const loadDraft = async () => {
+      const draft = await getFormDraft();
+      if (draft) {
+        setReport(draft);
+        if (draft.location?.address) {
+          setCurrentAddress(draft.location.address);
+        }
+      }
+    };
+    loadDraft();
+  }, []);
+
+  // Save draft on every change
+  useEffect(() => {
+    if (report && report.tempId) {
+      setFormDraft(report);
+    }
+  }, [report]);
 
   // Sync address on coordinate change
   useEffect(() => {
@@ -68,19 +90,15 @@ export default function IncidentForm() {
   const updateAddress = async (lat: number, lon: number) => {
     const data = await reverseGeocode(lat, lon);
     setCurrentAddress(data.address);
-    setReport(prev => {
-      const updated = {
-        ...prev,
-        location: {
-          ...prev.location!,
-          address: data.address,
-          barangay: data.barangay,
-          city: data.city
-        }
-      };
-      saveDraft(updated as IncidentReport);
-      return updated;
-    });
+    setReport(prev => ({
+      ...prev,
+      location: {
+        ...prev.location!,
+        address: data.address,
+        barangay: data.barangay,
+        city: data.city
+      }
+    }));
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,15 +141,11 @@ export default function IncidentForm() {
       }
     }
 
-    setReport(prev => {
-      const updated = { 
-        ...prev, 
-        images: newImages,
-        location: locationUpdated ? newLocation : prev.location
-      };
-      saveDraft(updated as IncidentReport);
-      return updated;
-    });
+    setReport(prev => ({ 
+      ...prev, 
+      images: newImages,
+      location: locationUpdated ? newLocation : prev.location
+    }));
     
     setIsProcessing(false);
   };
@@ -148,6 +162,7 @@ export default function IncidentForm() {
     setTimeout(async () => {
       const finalReport = { ...report, status: 'submitted' as const };
       await saveDraft(finalReport as IncidentReport);
+      await clearFormDraft();
       alert('Report submitted successfully to central database.');
       setIsProcessing(false);
       // Reset form
@@ -155,6 +170,7 @@ export default function IncidentForm() {
         tempId: crypto.randomUUID(),
         type: 'Vehicle Accident',
         description: '',
+        officerNotes: '',
         images: [],
         signatures: [],
         status: 'draft',
@@ -314,6 +330,17 @@ export default function IncidentForm() {
               />
               {errors.description && <p className="text-[10px] text-red-500 font-medium">{errors.description}</p>}
             </div>
+
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Internal Officer Notes (Optional)</label>
+              <textarea 
+                value={report.officerNotes || ''}
+                onChange={(e) => setReport(prev => ({ ...prev, officerNotes: e.target.value }))}
+                placeholder="Confidential tactical observations, suspicious behaviors, or follow-up requirements..."
+                rows={3}
+                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-none"
+              />
+            </div>
           </div>
 
           {/* Signatures Section */}
@@ -455,8 +482,9 @@ export default function IncidentForm() {
       <div className="fixed bottom-0 left-20 right-0 p-6 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center justify-center z-50">
         <div className="max-w-5xl w-full flex items-center justify-between gap-6">
           <button 
-            onClick={() => {
+            onClick={async () => {
               if (confirm('Discard this report? All unsaved data will be lost.')) {
+                await clearFormDraft();
                 window.location.reload();
               }
             }}
@@ -565,14 +593,10 @@ export default function IncidentForm() {
                     onCancel={() => setSignatureStep('info')}
                     onSave={(data) => {
                       const newSignature = { ...currentParty, data };
-                      setReport(prev => {
-                        const updated = {
-                          ...prev,
-                          signatures: [...(prev.signatures || []), newSignature]
-                        };
-                        saveDraft(updated as IncidentReport);
-                        return updated;
-                      });
+                      setReport(prev => ({
+                        ...prev,
+                        signatures: [...(prev.signatures || []), newSignature]
+                      }));
                       setShowSignaturePad(false);
                       setSignatureStep('info');
                       setCurrentParty({ name: '', type: 'Involved Party' });
