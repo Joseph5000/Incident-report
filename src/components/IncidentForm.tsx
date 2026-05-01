@@ -5,7 +5,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import exifr from 'exifr';
-import { Camera, MapPin, Clock, FileText, Upload, CheckCircle, AlertCircle, Trash2, X, PenTool, UserPlus } from 'lucide-react';
+import { createWorker } from 'tesseract.js';
+import { Camera, MapPin, Clock, FileText, Upload, CheckCircle, AlertCircle, Trash2, X, PenTool, UserPlus, User, Car, Mic, MicOff, Square, Volume2, Play, Scan, Video, VideoOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import Map from './Map';
@@ -21,13 +22,24 @@ export default function IncidentForm() {
     type: 'Vehicle Accident',
     description: '',
     officerNotes: '',
+    impoundDetails: {
+      towCompany: '',
+      lotNumber: '',
+      reason: '',
+      inventoryNotes: ''
+    },
     images: [],
     signatures: [],
+    involvement: [],
+    vehicles: [],
+    audioNotes: [],
+    videos: [],
     status: 'draft',
     createdAt: new Date().toISOString(),
     location: {
       latitude: 14.5995, // Default Manila
       longitude: 120.9842,
+      accuracy: undefined,
       timestamp: new Date().toISOString()
     }
   });
@@ -35,10 +47,289 @@ export default function IncidentForm() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentAddress, setCurrentAddress] = useState('Acquiring location...');
   const [showSignaturePad, setShowSignaturePad] = useState(false);
+  const [showInvolvementModal, setShowInvolvementModal] = useState(false);
+  const [showVehicleModal, setShowVehicleModal] = useState(false);
   const [currentParty, setCurrentParty] = useState({ name: '', type: 'Involved Party' });
+  const [involvementForm, setInvolvementForm] = useState({ name: '', type: 'Suspect' as const, description: '', contact: '', dob: '' });
+  const [vehicleForm, setVehicleForm] = useState({ plate: '', make: '', model: '', color: '', notes: '' });
   const [signatureStep, setSignatureStep] = useState<'info' | 'pad'>('info');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lpScanInputRef = useRef<HTMLInputElement>(null);
+
+  // License Plate OCR State
+  const [isScanningLP, setIsScanningLP] = useState(false);
+  const [lpProcessingProgress, setLpProcessingProgress] = useState(0);
+  const [ocrProcessingIdx, setOcrProcessingIdx] = useState<number | null>(null);
+  const [ocrProgress, setOcrProgress] = useState(0);
+
+  // Speech Recognition State
+  const [isListening, setIsListening] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    // Initialize Speech Recognition
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        const field = isListening;
+        if (field) {
+          setReport(prev => ({
+            ...prev,
+            [field]: (prev[field as keyof Partial<IncidentReport>] || '') + (prev[field as keyof Partial<IncidentReport>] ? ' ' : '') + transcript
+          }));
+          
+          if (field === 'description' && transcript.length > 0) {
+            setErrors(prev => ({ ...prev, description: '' }));
+          }
+        }
+        setIsListening(null);
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech Recognition Error:', event.error);
+        setIsListening(null);
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(null);
+      };
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, [isListening]);
+
+  const toggleListening = (field: string) => {
+    if (isListening === field) {
+      recognitionRef.current?.stop();
+    } else {
+      if (!(window as any).SpeechRecognition && !(window as any).webkitSpeechRecognition) {
+        alert('Speech recognition is not supported in this browser.');
+        return;
+      }
+      setIsListening(field);
+      recognitionRef.current?.start();
+    }
+  };
+
+  const handleGeneralOCR = async (idx: number) => {
+    const imageData = report.images?.[idx];
+    if (!imageData) return;
+
+    setOcrProcessingIdx(idx);
+    setOcrProgress(0);
+
+    try {
+      const worker = await createWorker('eng', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            setOcrProgress(Math.round(m.progress * 100));
+          }
+        },
+      });
+
+      const { data: { text } } = await worker.recognize(imageData);
+      
+      const cleanedText = text.trim();
+      
+      if (cleanedText) {
+        const confirmAppend = window.confirm(`Extracted Text:\n\n"${cleanedText.slice(0, 200)}..."\n\nAppend this to the Incident Description?`);
+        if (confirmAppend) {
+          setReport(prev => ({
+            ...prev,
+            description: prev.description + `\n\n[OCR EXTRACTED TEXT - CLIP ${idx + 1}]:\n${cleanedText}`
+          }));
+        }
+      } else {
+        alert('No legible text detected in this image.');
+      }
+      
+      await worker.terminate();
+    } catch (err) {
+      console.error('OCR Error:', err);
+      alert('Failed to extract text. Ensure the image is clear and contains readable text.');
+    } finally {
+      setOcrProcessingIdx(null);
+      setOcrProgress(0);
+    }
+  };
+
+  const handleLPScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsScanningLP(true);
+    setLpProcessingProgress(0);
+
+    try {
+      const worker = await createWorker('eng', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            setLpProcessingProgress(Math.round(m.progress * 100));
+          }
+        },
+      });
+
+      const { data: { text } } = await worker.recognize(file);
+      
+      // Clean up the text - usually license plates are alphanumeric
+      // This is a naive regex, could be improved based on locale
+      const cleanedPlate = text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      
+      if (cleanedPlate) {
+        setVehicleForm(prev => ({ ...prev, plate: cleanedPlate }));
+      }
+      
+      await worker.terminate();
+    } catch (err) {
+      console.error('OCR Error:', err);
+      alert('Failed to scan license plate. Please try capturing a clearer image or enter manually.');
+    } finally {
+      setIsScanningLP(false);
+      setLpProcessingProgress(0);
+      if (lpScanInputRef.current) lpScanInputRef.current.value = '';
+    }
+  };
+
+  // Audio Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Video Recording State
+  const [isRecordingVideo, setIsRecordingVideo] = useState(false);
+  const [videoTime, setVideoTime] = useState(0);
+  const videoMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoChunksRef = useRef<Blob[]>([]);
+  const videoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
+
+  const startVideoRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      videoMediaRecorderRef.current = mediaRecorder;
+      videoChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          videoChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const videoBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(videoBlob);
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          setReport(prev => ({
+            ...prev,
+            videos: [
+              ...(prev.videos || []),
+              {
+                id: crypto.randomUUID(),
+                data: base64data,
+                timestamp: new Date().toISOString()
+              }
+            ]
+          }));
+        };
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecordingVideo(true);
+      setVideoTime(0);
+      videoTimerRef.current = setInterval(() => {
+        setVideoTime(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to start video recording', err);
+      alert('Camera access denied or not available.');
+    }
+  };
+
+  const stopVideoRecording = () => {
+    if (videoMediaRecorderRef.current && isRecordingVideo) {
+      videoMediaRecorderRef.current.stop();
+      setIsRecordingVideo(false);
+      if (videoTimerRef.current) clearInterval(videoTimerRef.current);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          setReport(prev => ({
+            ...prev,
+            audioNotes: [
+              ...(prev.audioNotes || []),
+              {
+                id: crypto.randomUUID(),
+                data: base64data,
+                duration: recordingTime,
+                timestamp: new Date().toISOString()
+              }
+            ]
+          }));
+        };
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      alert('Microphone access denied or not available.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Load draft on mount
   useEffect(() => {
@@ -67,6 +358,30 @@ export default function IncidentForm() {
       updateAddress(report.location.latitude, report.location.longitude);
     }
   }, [report.location?.latitude, report.location?.longitude]);
+
+  // Live GPS Watch
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setReport(prev => ({
+          ...prev,
+          location: {
+            ...prev.location!,
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            timestamp: new Date().toISOString()
+          }
+        }));
+      },
+      (err) => console.error('GPS Watch Error:', err),
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
 
   const validateForm = () => {
     const newErrors: { [key: string]: string } = {};
@@ -114,24 +429,29 @@ export default function IncidentForm() {
 
     for (const file of Array.from(files)) {
       try {
-        // 1. Extract EXIF
-        const metadata = await exifr.gps(file);
-        const timestampData = await exifr.parse(file, ['DateTimeOriginal']);
+        // 1. Extract EXIF (optional, don't fail the whole image if it fails)
+        try {
+          const metadata = await exifr.gps(file);
+          const timestampData = await exifr.parse(file, ['DateTimeOriginal']);
 
-        if (metadata && metadata.latitude && metadata.longitude) {
-          newLocation = {
-            ...newLocation,
-            latitude: metadata.latitude,
-            longitude: metadata.longitude,
-            timestamp: timestampData?.DateTimeOriginal?.toISOString() || newLocation.timestamp
-          };
-          locationUpdated = true;
+          if (metadata && metadata.latitude && metadata.longitude) {
+            newLocation = {
+              ...newLocation,
+              latitude: metadata.latitude,
+              longitude: metadata.longitude,
+              timestamp: timestampData?.DateTimeOriginal?.toISOString() || newLocation.timestamp
+            };
+            locationUpdated = true;
+          }
+        } catch (exifErr) {
+          console.warn('EXIF capture skipped:', exifErr);
         }
 
         // 2. Read file as Base64 for preview
         const reader = new FileReader();
-        const base64 = await new Promise<string>((resolve) => {
+        const base64 = await new Promise<string>((resolve, reject) => {
           reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error('File reading failed'));
           reader.readAsDataURL(file);
         });
         newImages.push(base64);
@@ -171,11 +491,26 @@ export default function IncidentForm() {
         type: 'Vehicle Accident',
         description: '',
         officerNotes: '',
+        impoundDetails: {
+          towCompany: '',
+          lotNumber: '',
+          reason: '',
+          inventoryNotes: ''
+        },
         images: [],
         signatures: [],
+        involvement: [],
+        vehicles: [],
+        audioNotes: [],
+        videos: [],
         status: 'draft',
         createdAt: new Date().toISOString(),
-        location: { latitude: 14.5995, longitude: 120.9842, timestamp: new Date().toISOString() }
+        location: { 
+          latitude: 14.5995, 
+          longitude: 120.9842, 
+          accuracy: undefined,
+          timestamp: new Date().toISOString() 
+        }
       });
       setErrors({});
     }, 1500);
@@ -230,31 +565,106 @@ export default function IncidentForm() {
               )}>
                 Evidence Collection {errors.images && "• REQUIRED"}
               </label>
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="text-blue-600 font-bold text-[10px] hover:underline flex items-center gap-1"
-              >
-                <Camera size={12} /> OPEN CAMERA
-              </button>
+              <div className="flex items-center gap-4">
+                {!isRecordingVideo ? (
+                  <button 
+                    onClick={startVideoRecording}
+                    className="text-red-600 font-black text-[10px] hover:underline flex items-center gap-1.5 uppercase tracking-widest"
+                  >
+                    <Video size={14} /> Record Video
+                  </button>
+                ) : (
+                  <button 
+                    onClick={stopVideoRecording}
+                    className="text-slate-900 font-black text-[10px] flex items-center gap-1.5 uppercase tracking-widest animate-pulse"
+                  >
+                    <VideoOff size={14} /> Stop ({formatTime(videoTime)})
+                  </button>
+                )}
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-blue-600 font-bold text-[10px] hover:underline flex items-center gap-1 uppercase tracking-widest"
+                >
+                  <Camera size={12} /> Camera
+                </button>
+              </div>
             </div>
             
             <div className="grid grid-cols-3 gap-3">
               <AnimatePresence>
                 {report.images?.map((img, idx) => (
                   <motion.div 
-                    key={idx}
+                    key={`img-${idx}`}
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
                     className="relative aspect-square rounded-2xl overflow-hidden border border-slate-100 bg-slate-50 group"
                   >
                     <img src={img} alt="Evidence" className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
+                       {ocrProcessingIdx === idx ? (
+                         <div className="flex flex-col items-center gap-1">
+                           <div className="w-10 h-10 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                           <span className="text-[8px] font-black text-white uppercase tracking-widest">{ocrProgress}%</span>
+                         </div>
+                       ) : (
+                         <div className="flex items-center gap-2">
+                           <button 
+                             onClick={() => handleGeneralOCR(idx)}
+                             title="Extract Text (OCR)"
+                             className="bg-indigo-600 text-white p-2 rounded-xl shadow-xl hover:bg-indigo-500 transition-colors"
+                           >
+                             <Scan size={14} />
+                           </button>
+                           <button 
+                             onClick={() => setReport(prev => ({ ...prev, images: prev.images?.filter((_, i) => i !== idx) }))}
+                             className="bg-white text-slate-900 p-2 rounded-xl shadow-xl hover:bg-slate-100 transition-colors"
+                           >
+                             <Trash2 size={14} />
+                           </button>
+                         </div>
+                       )}
+                    </div>
+                  </motion.div>
+                ))}
+                {report.videos?.map((vid) => (
+                  <motion.div 
+                    key={vid.id}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className="relative aspect-square rounded-2xl overflow-hidden border border-red-100 bg-slate-900 group"
+                  >
+                    <video src={vid.data} className="w-full h-full object-cover" />
+                    <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-red-600 text-[8px] font-black text-white rounded uppercase tracking-tighter shadow-lg flex items-center gap-1">
+                      <div className="w-1 h-1 bg-white rounded-full animate-pulse" /> MP4 EVIDENCE
+                    </div>
+                    <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                       <button 
-                        onClick={() => setReport(prev => ({ ...prev, images: prev.images?.filter((_, i) => i !== idx) }))}
-                        className="bg-white text-slate-900 p-2 rounded-full shadow-xl"
+                        onClick={() => {
+                          const v = document.createElement('video');
+                          v.src = vid.data;
+                          v.style.position = 'fixed';
+                          v.style.top = '0';
+                          v.style.left = '0';
+                          v.style.width = '100%';
+                          v.style.height = '100%';
+                          v.style.zIndex = '9999';
+                          v.style.background = 'black';
+                          v.controls = true;
+                          v.onclick = () => v.remove();
+                          document.body.appendChild(v);
+                          v.play();
+                        }}
+                        className="bg-white text-slate-900 p-2 rounded-xl shadow-xl hover:bg-slate-100 transition-colors"
                       >
-                        <Trash2 size={16} />
+                        <Play size={14} />
+                      </button>
+                      <button 
+                        onClick={() => setReport(prev => ({ ...prev, videos: prev.videos?.filter(v => v.id !== vid.id) }))}
+                        className="bg-red-600 text-white p-2 rounded-xl shadow-xl hover:bg-red-500 transition-colors"
+                      >
+                        <Trash2 size={14} />
                       </button>
                     </div>
                   </motion.div>
@@ -300,19 +710,98 @@ export default function IncidentForm() {
               >
                 <option>Vehicle Accident</option>
                 <option>Hit and Run</option>
+                <option>Vehicle Impound</option>
                 <option>Traffic Obstruction</option>
                 <option>Public Disturbance</option>
                 <option>Other / Assist</option>
               </select>
             </div>
 
+            {report.type === 'Vehicle Impound' && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="space-y-4 pt-2 border-t border-slate-100"
+              >
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Tow Company</label>
+                    <input 
+                      type="text"
+                      value={report.impoundDetails?.towCompany || ''}
+                      onChange={(e) => setReport(prev => ({ 
+                        ...prev, 
+                        impoundDetails: { ...prev.impoundDetails!, towCompany: e.target.value } 
+                      }))}
+                      placeholder="Company Name"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Lot Number / Location</label>
+                    <input 
+                      type="text"
+                      value={report.impoundDetails?.lotNumber || ''}
+                      onChange={(e) => setReport(prev => ({ 
+                        ...prev, 
+                        impoundDetails: { ...prev.impoundDetails!, lotNumber: e.target.value } 
+                      }))}
+                      placeholder="Storage Lot #"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Legal Reason for Impound</label>
+                  <input 
+                    type="text"
+                    value={report.impoundDetails?.reason || ''}
+                    onChange={(e) => setReport(prev => ({ 
+                      ...prev, 
+                      impoundDetails: { ...prev.impoundDetails!, reason: e.target.value } 
+                    }))}
+                    placeholder="e.g. Evidence, Illegal Parking, Unregistered"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Inventory Notes (Valuables/Damage)</label>
+                  <textarea 
+                    rows={2}
+                    value={report.impoundDetails?.inventoryNotes || ''}
+                    onChange={(e) => setReport(prev => ({ 
+                      ...prev, 
+                      impoundDetails: { ...prev.impoundDetails!, inventoryNotes: e.target.value } 
+                    }))}
+                    placeholder="List personal property left in vehicle, existing damage, etc."
+                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 text-sm resize-none"
+                  />
+                </div>
+              </motion.div>
+            )}
+
             <div>
-              <label className={cn(
-                "text-[10px] font-bold uppercase tracking-widest block mb-2",
-                errors.description ? "text-red-500" : "text-slate-400"
-              )}>
-                Officer Summary {errors.description && "• REQUIRED"}
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className={cn(
+                  "text-[10px] font-bold uppercase tracking-widest block",
+                  errors.description ? "text-red-500" : "text-slate-400"
+                )}>
+                  Officer Summary {errors.description && "• REQUIRED"}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => toggleListening('description')}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                    isListening === 'description' 
+                      ? "bg-red-500 text-white animate-pulse" 
+                      : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  )}
+                >
+                  {isListening === 'description' ? <MicOff size={10} /> : <Mic size={10} />}
+                  {isListening === 'description' ? "Listening..." : "Dictate"}
+                </button>
+              </div>
               <textarea 
                 value={report.description}
                 onChange={(e) => {
@@ -331,8 +820,93 @@ export default function IncidentForm() {
               {errors.description && <p className="text-[10px] text-red-500 font-medium">{errors.description}</p>}
             </div>
 
+            {/* Tactical Audio Section */}
+            <div className="space-y-4 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Tactical Audio Logs</label>
+                {!isRecording ? (
+                  <button 
+                    type="button"
+                    onClick={startRecording}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors"
+                  >
+                    <Mic size={14} /> Start Record
+                  </button>
+                ) : (
+                  <button 
+                    type="button"
+                    onClick={stopRecording}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest animate-pulse"
+                  >
+                    <Square size={14} /> Stop ({formatTime(recordingTime)})
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {report.audioNotes?.length === 0 ? (
+                  <div className="p-6 border-2 border-dashed border-slate-100 rounded-2xl text-center">
+                    <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">No audio statements captured</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2">
+                    {report.audioNotes?.map((note) => (
+                      <div key={note.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between group">
+                        <div className="flex items-center gap-3">
+                           <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600">
+                             <Volume2 size={18} />
+                           </div>
+                           <div>
+                             <p className="text-xs font-black text-slate-800 uppercase tracking-tight">Audio Note {note.id.slice(0, 4)}</p>
+                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+                               {formatTime(note.duration)} • {new Date(note.timestamp).toLocaleTimeString()}
+                             </p>
+                           </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <audio src={note.data} className="hidden" id={`audio-${note.id}`} />
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById(`audio-${note.id}`) as HTMLAudioElement;
+                              el?.play();
+                            }}
+                            className="p-3 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-blue-500 transition-all shadow-sm"
+                          >
+                            <Play size={14} />
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => setReport(prev => ({ ...prev, audioNotes: prev.audioNotes?.filter(n => n.id !== note.id) }))}
+                            className="p-3 bg-white border border-slate-200 rounded-xl text-slate-300 hover:text-red-500 transition-all shadow-sm"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div>
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Internal Officer Notes (Optional)</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Internal Officer Notes (Optional)</label>
+                <button
+                  type="button"
+                  onClick={() => toggleListening('officerNotes')}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                    isListening === 'officerNotes' 
+                      ? "bg-red-500 text-white animate-pulse" 
+                      : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  )}
+                >
+                  {isListening === 'officerNotes' ? <MicOff size={10} /> : <Mic size={10} />}
+                  {isListening === 'officerNotes' ? "Listening..." : "Dictate"}
+                </button>
+              </div>
               <textarea 
                 value={report.officerNotes || ''}
                 onChange={(e) => setReport(prev => ({ ...prev, officerNotes: e.target.value }))}
@@ -417,15 +991,121 @@ export default function IncidentForm() {
 
         {/* Right Column: Mapping & Geo */}
         <div className="space-y-6">
+          {/* Involvement Section */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                <UserPlus size={12} className="text-blue-500" /> Involvement Records
+              </label>
+              <button 
+                onClick={() => setShowInvolvementModal(true)}
+                className="text-blue-600 font-bold text-[10px] hover:underline"
+              >
+                + ADD PERSON
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              {report.involvement?.length === 0 ? (
+                <div className="p-8 border-2 border-dashed border-slate-100 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">No persons recorded</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2">
+                  {report.involvement?.map((person) => (
+                    <div key={person.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                         <div className={cn(
+                           "w-8 h-8 rounded-lg flex items-center justify-center text-white",
+                           person.type === 'Suspect' ? "bg-red-500" :
+                           person.type === 'Witness' ? "bg-blue-500" : "bg-slate-500"
+                         )}>
+                           <User size={14} />
+                         </div>
+                         <div>
+                           <p className="text-xs font-black text-slate-800 uppercase tracking-tight">{person.name}</p>
+                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{person.type} {person.description && `• ${person.description.slice(0, 20)}...`}</p>
+                         </div>
+                      </div>
+                      <button 
+                        onClick={() => setReport(prev => ({ ...prev, involvement: prev.involvement?.filter(p => p.id !== person.id) }))}
+                        className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Vehicles Section */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                <Car size={12} className="text-blue-500" /> Vehicle Identification
+              </label>
+              <button 
+                onClick={() => setShowVehicleModal(true)}
+                className="text-blue-600 font-bold text-[10px] hover:underline"
+              >
+                + ADD VEHICLE
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              {report.vehicles?.length === 0 ? (
+                <div className="p-8 border-2 border-dashed border-slate-100 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">No vehicles recorded</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2">
+                  {report.vehicles?.map((v) => (
+                    <div key={v.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                         <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-white">
+                           <Car size={14} />
+                         </div>
+                         <div>
+                           <p className="text-xs font-black text-slate-800 uppercase tracking-tight">{v.plate}</p>
+                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{v.color} {v.make} {v.model}</p>
+                         </div>
+                      </div>
+                      <button 
+                        onClick={() => setReport(prev => ({ ...prev, vehicles: prev.vehicles?.filter(veh => veh.id !== v.id) }))}
+                        className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm flex flex-col h-full">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   Evidence Mapping
                 </label>
-                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded flex items-center gap-1">
-                  <div className="w-1 h-1 bg-blue-600 rounded-full animate-pulse" /> LIVE GPS SYNC
-                </span>
+                <div className="flex items-center gap-2">
+                  {report.location?.accuracy && (
+                    <span className={cn(
+                      "text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-tighter transition-colors",
+                      report.location.accuracy < 20 ? "bg-green-100 text-green-700" :
+                      report.location.accuracy < 50 ? "bg-amber-100 text-amber-700" :
+                      "bg-red-100 text-red-700"
+                    )}>
+                      ±{Math.round(report.location.accuracy)}m Accuracy
+                    </span>
+                  )}
+                  <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded flex items-center gap-1">
+                    <div className="w-1 h-1 bg-blue-600 rounded-full animate-pulse" /> LIVE GPS SYNC
+                  </span>
+                </div>
               </div>
               
               <div className="space-y-3">
@@ -454,7 +1134,10 @@ export default function IncidentForm() {
             </div>
 
             <div className="flex-1 min-h-[300px] rounded-2xl overflow-hidden border border-slate-100">
-              <Map center={[report.location?.latitude || 14.5995, report.location?.longitude || 120.9842]} />
+              <Map 
+                center={[report.location?.latitude || 14.5995, report.location?.longitude || 120.9842]} 
+                accuracy={report.location?.accuracy}
+              />
             </div>
             
             <button 
@@ -465,7 +1148,8 @@ export default function IncidentForm() {
                     location: {
                       ...prev.location!,
                       latitude: pos.coords.latitude,
-                      longitude: pos.coords.longitude
+                      longitude: pos.coords.longitude,
+                      accuracy: pos.coords.accuracy
                     }
                   }));
                 });
@@ -520,10 +1204,109 @@ export default function IncidentForm() {
         </div>
       </div>
 
-      {/* Signature Modal */}
       <AnimatePresence>
+        {showInvolvementModal && (
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-8 space-y-6">
+               <h3 className="text-xl font-bold italic">Add Involvement Record</h3>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Subject Name</label>
+                    <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={involvementForm.name} onChange={e => setInvolvementForm({...involvementForm, name: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Role</label>
+                    <select className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={involvementForm.type} onChange={e => setInvolvementForm({...involvementForm, type: e.target.value as any})}>
+                      <option>Suspect</option>
+                      <option>Witness</option>
+                      <option>Victim</option>
+                      <option>Reporting Person</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">DOB</label>
+                    <input type="date" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={involvementForm.dob} onChange={e => setInvolvementForm({...involvementForm, dob: e.target.value})} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Description / Tattoos / Physicals</label>
+                    <textarea rows={2} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={involvementForm.description} onChange={e => setInvolvementForm({...involvementForm, description: e.target.value})} />
+                  </div>
+               </div>
+               <div className="flex gap-4">
+                 <button onClick={() => setShowInvolvementModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
+                 <button onClick={() => {
+                   setReport(prev => ({ ...prev, involvement: [...(prev.involvement || []), { ...involvementForm, id: crypto.randomUUID() }] }));
+                   setShowInvolvementModal(false);
+                   setInvolvementForm({ name: '', type: 'Suspect', description: '', contact: '', dob: '' });
+                 }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Add Record</button>
+               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showVehicleModal && (
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-8 space-y-6">
+               <h3 className="text-xl font-bold italic">Identify Vehicle</h3>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">License Plate</label>
+                      <button 
+                        type="button" 
+                        onClick={() => lpScanInputRef.current?.click()}
+                        disabled={isScanningLP}
+                        className={cn(
+                          "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                          isScanningLP ? "bg-slate-100 text-slate-400" : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
+                        )}
+                      >
+                        <Scan size={12} /> {isScanningLP ? `Scanning ${lpProcessingProgress}%` : "Scan Plate"}
+                      </button>
+                      <input 
+                        type="file" 
+                        ref={lpScanInputRef} 
+                        onChange={handleLPScan} 
+                        accept="image/*" 
+                        capture="environment"
+                        className="hidden" 
+                      />
+                    </div>
+                    <input 
+                      type="text" 
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm uppercase font-mono tracking-widest focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium" 
+                      value={vehicleForm.plate} 
+                      onChange={e => setVehicleForm({...vehicleForm, plate: e.target.value})} 
+                      placeholder="ABC 1234"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Make</label>
+                    <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={vehicleForm.make} onChange={e => setVehicleForm({...vehicleForm, make: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Model</label>
+                    <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={vehicleForm.model} onChange={e => setVehicleForm({...vehicleForm, model: e.target.value})} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Color & Distinct Features</label>
+                    <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={vehicleForm.color} onChange={e => setVehicleForm({...vehicleForm, color: e.target.value})} />
+                  </div>
+               </div>
+               <div className="flex gap-4">
+                 <button onClick={() => setShowVehicleModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
+                 <button onClick={() => {
+                   setReport(prev => ({ ...prev, vehicles: [...(prev.vehicles || []), { ...vehicleForm, id: crypto.randomUUID() }] }));
+                   setShowVehicleModal(false);
+                   setVehicleForm({ plate: '', make: '', model: '', color: '', notes: '' });
+                 }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Log Vehicle</button>
+               </div>
+            </motion.div>
+          </div>
+        )}
+
         {showSignaturePad && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}

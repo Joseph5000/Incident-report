@@ -30,8 +30,23 @@ body {
   width: 100%;
   background: #f1f5f9;
   border-radius: 12px;
+  isolation: isolate;
+  z-index: 0 !important;
 }
 
 .leaflet-control-attribution {
   display: none;
+}
+
+.leaflet-top, 
+.leaflet-bottom {
+  z-index: 50 !important;
+}
+
+.leaflet-pane {
+  z-index: 40 !important;
+}
+
+.leaflet-control {
+  z-index: 60 !important;
 }

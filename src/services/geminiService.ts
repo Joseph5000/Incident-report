@@ -22,6 +22,7 @@ export async function generateIncidentSummary(report: IncidentReport): Promise<s
       Location: ${report.location?.address || 'Unknown'}
       Description: ${report.description}
       Involved Parties: ${report.signatures.map(s => s.name).join(', ') || 'None listed'}
+      Audio Statements: ${report.audioNotes?.length || 0} clips recorded.
     `;
 
     const response = await ai.models.generateContent({

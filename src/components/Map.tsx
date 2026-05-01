@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MapContainer, TileLayer, Marker, useMap, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMap, Popup, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import { useEffect } from 'react';
 
@@ -21,6 +21,7 @@ L.Icon.Default.mergeOptions({
 
 interface MapProps {
   center: [number, number];
+  accuracy?: number;
   zoom?: number;
 }
 
@@ -32,14 +33,14 @@ function ChangeView({ center }: { center: [number, number] }) {
   return null;
 }
 
-export default function Map({ center, zoom = 15 }: MapProps) {
+export default function Map({ center, accuracy, zoom = 15 }: MapProps) {
   return (
-    <div className="h-full w-full rounded-2xl overflow-hidden border border-slate-100 shadow-inner bg-slate-100">
+    <div className="h-full w-full rounded-2xl overflow-hidden border border-slate-100 shadow-inner bg-slate-100 relative z-0 isolate">
       <MapContainer 
         center={center} 
         zoom={zoom} 
         scrollWheelZoom={false}
-        className="h-full w-full"
+        className="h-full w-full grayscale-[0.2]"
       >
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -50,6 +51,33 @@ export default function Map({ center, zoom = 15 }: MapProps) {
             Incident Verified
           </Popup>
         </Marker>
+        {accuracy && (
+          <>
+            <Circle
+              center={center}
+              radius={accuracy}
+              pathOptions={{
+                fillColor: '#3b82f6',
+                fillOpacity: 0.15,
+                color: '#3b82f6',
+                weight: 1.5,
+                dashArray: '5, 10',
+                lineCap: 'round'
+              }}
+            />
+            {/* Inner "pulse" indicator */}
+            <Circle
+              center={center}
+              radius={Math.max(2, accuracy * 0.1)}
+              pathOptions={{
+                fillColor: '#3b82f6',
+                fillOpacity: 0.4,
+                color: 'transparent',
+                stroke: false
+              }}
+            />
+          </>
+        )}
         <ChangeView center={center} />
       </MapContainer>
     </div>

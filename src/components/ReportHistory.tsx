@@ -6,10 +6,11 @@
 import React, { useEffect, useState } from 'react';
 import { getAllReports, deleteReport } from '../lib/db';
 import { IncidentReport } from '../types';
-import { Trash2, MapPin, Calendar, Clock, AlertCircle, ChevronRight, FileText, X, User, Sparkles, Brain, Loader2, Shield } from 'lucide-react';
+import { Trash2, MapPin, Calendar, Clock, AlertCircle, ChevronRight, FileText, X, User, Sparkles, Brain, Loader2, Shield, Volume2, Play, Car, Video, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { generateIncidentSummary } from '../services/geminiService';
+import Map from './Map';
 
 export default function ReportHistory() {
   const [reports, setReports] = useState<IncidentReport[]>([]);
@@ -18,6 +19,7 @@ export default function ReportHistory() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchReports = async () => {
     setLoading(true);
@@ -57,6 +59,15 @@ export default function ReportHistory() {
     }
   };
 
+  const filteredReports = reports.filter(report => {
+    const query = searchQuery.toLowerCase();
+    return (
+      report.description?.toLowerCase().includes(query) ||
+      report.officerNotes?.toLowerCase().includes(query) ||
+      report.type?.toLowerCase().includes(query)
+    );
+  });
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -88,9 +99,31 @@ export default function ReportHistory() {
         </div>
       </header>
 
+      <div className="relative group">
+        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+          <Search size={18} />
+        </div>
+        <input 
+          type="text"
+          placeholder="Search tactical logs (keywords, notes, types)..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-sm font-medium shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+        />
+        {searchQuery && (
+          <button 
+            onClick={() => setSearchQuery('')}
+            className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-slate-900 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
       <div className="grid gap-4">
-        <AnimatePresence>
-          {reports.map((report, index) => (
+        <AnimatePresence mode="popLayout">
+          {filteredReports.length > 0 ? (
+            filteredReports.map((report, index) => (
             <motion.div
               key={report.tempId}
               initial={{ opacity: 0, y: 20 }}
@@ -164,12 +197,27 @@ export default function ReportHistory() {
                     <AlertCircle size={16} className="text-blue-600" />
                   </div>
                 )}
+                {report.videos && report.videos.length > 0 && (
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-red-50 border border-red-100">
+                    <Video size={16} className="text-red-500" />
+                  </div>
+                )}
                 <button className="p-3 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all">
                   <ChevronRight size={24} />
                 </button>
               </div>
             </motion.div>
-          ))}
+          ))
+        ) : (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="py-12 flex flex-col items-center justify-center text-slate-300 space-y-4"
+          >
+            <Search size={48} strokeWidth={1} />
+            <p className="font-bold text-xs tracking-[0.2em] uppercase text-slate-400">No matching records found</p>
+          </motion.div>
+        )}
         </AnimatePresence>
       </div>
 
@@ -179,7 +227,7 @@ export default function ReportHistory() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 md:p-8"
+            className="fixed inset-0 z-[180] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 md:p-8"
             onClick={() => setSelectedReport(null)}
           >
             <motion.div
@@ -243,6 +291,69 @@ export default function ReportHistory() {
                           </div>
                         )}
 
+                        {selectedReport.impoundDetails && (
+                          <div className="space-y-4 pt-4 border-t border-slate-200">
+                             <div className="flex items-center gap-2 text-[10px] font-black text-blue-600 uppercase tracking-widest">
+                               <Car size={12} /> Impoundment Record
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tow Company</span>
+                                <p className="text-xs font-bold text-slate-800">{selectedReport.impoundDetails.towCompany}</p>
+                              </div>
+                              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Storage Lot</span>
+                                <p className="text-xs font-bold text-slate-800">{selectedReport.impoundDetails.lotNumber}</p>
+                              </div>
+                              <div className="col-span-2 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Legal Reason</span>
+                                <p className="text-xs font-bold text-slate-800 italic">"{selectedReport.impoundDetails.reason}"</p>
+                              </div>
+                              {selectedReport.impoundDetails.inventoryNotes && (
+                                <div className="col-span-2 bg-slate-100 p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Inventory & Damage Notes</span>
+                                  <p className="text-xs text-slate-600 leading-relaxed font-mono">{selectedReport.impoundDetails.inventoryNotes}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedReport.audioNotes && selectedReport.audioNotes.length > 0 && (
+                          <div className="space-y-4 pt-4 border-t border-slate-200">
+                             <div className="flex items-center gap-2 text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+                               <Volume2 size={12} /> Captured Audio Statements
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {selectedReport.audioNotes.map((note) => (
+                                <div key={note.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+                                      <Volume2 size={14} />
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] font-black text-slate-800 uppercase tracking-tight">Statement {note.id.slice(0, 4)}</p>
+                                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">
+                                        {Math.floor(note.duration / 60)}:{(note.duration % 60).toString().padStart(2, '0')} duration
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <audio src={note.data} className="hidden" id={`hist-audio-${note.id}`} />
+                                  <button 
+                                    onClick={() => {
+                                      const el = document.getElementById(`hist-audio-${note.id}`) as HTMLAudioElement;
+                                      el?.play();
+                                    }}
+                                    className="p-2 bg-slate-50 rounded-xl text-slate-400 hover:text-indigo-600 transition-all border border-slate-100"
+                                  >
+                                    <Play size={14} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex flex-wrap gap-6 pt-4 border-t border-slate-200">
                           <div className="space-y-1">
                             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Logged Date</span>
@@ -264,13 +375,29 @@ export default function ReportHistory() {
 
                     <div className="space-y-4">
                       <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Deployment Context</h4>
-                      <div className="p-6 rounded-3xl bg-slate-50 border border-slate-100 flex items-start gap-3">
-                        <MapPin size={18} className="text-blue-500 mt-0.5 shrink-0" />
-                        <div>
-                          <p className="text-sm font-bold text-slate-700">{selectedReport.location?.address || 'Geolocation coordinate unavailable'}</p>
-                          <p className="text-[10px] text-slate-400 uppercase tracking-tight mt-1">
-                            {selectedReport.location?.latitude.toFixed(6)}, {selectedReport.location?.longitude.toFixed(6)}
-                          </p>
+                      <div className="space-y-4">
+                        <div className="p-6 rounded-3xl bg-slate-50 border border-slate-100 flex items-start gap-3">
+                          <MapPin size={18} className="text-blue-500 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-sm font-bold text-slate-700">{selectedReport.location?.address || 'Geolocation coordinate unavailable'}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-[10px] text-slate-400 uppercase tracking-tight">
+                                {selectedReport.location?.latitude.toFixed(6)}, {selectedReport.location?.longitude.toFixed(6)}
+                              </p>
+                              {selectedReport.location?.accuracy && (
+                                <span className="text-[8px] font-black px-1.5 py-0.5 bg-slate-200 text-slate-500 rounded uppercase tracking-tighter">
+                                  ±{Math.round(selectedReport.location.accuracy)}m
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="h-48 rounded-3xl overflow-hidden border border-slate-100 shadow-inner">
+                           <Map 
+                             center={[selectedReport.location?.latitude || 14.5995, selectedReport.location?.longitude || 120.9842]} 
+                             accuracy={selectedReport.location?.accuracy}
+                             zoom={16}
+                           />
                         </div>
                       </div>
                     </div>
@@ -284,7 +411,37 @@ export default function ReportHistory() {
                           <img src={img} alt="Evidence" className="w-full h-full object-cover" />
                         </div>
                       ))}
-                      {selectedReport.images.length === 0 && (
+                      {selectedReport.videos?.map((vid) => (
+                        <div key={vid.id} className="aspect-square rounded-2xl overflow-hidden border border-red-100 shadow-sm bg-slate-900 relative group">
+                          <video src={vid.data} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-slate-900/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => {
+                                const v = document.createElement('video');
+                                v.src = vid.data;
+                                v.style.position = 'fixed';
+                                v.style.top = '0';
+                                v.style.left = '0';
+                                v.style.width = '100%';
+                                v.style.height = '100%';
+                                v.style.zIndex = '9999';
+                                v.style.background = 'black';
+                                v.controls = true;
+                                v.onclick = () => v.remove();
+                                document.body.appendChild(v);
+                                v.play();
+                              }}
+                              className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-slate-900 shadow-xl"
+                            >
+                              <Play size={18} />
+                            </button>
+                          </div>
+                          <div className="absolute bottom-2 left-2 px-1.5 py-0.5 bg-red-600/90 text-[7px] font-black text-white rounded uppercase tracking-tighter shadow-lg">
+                            VIDEO
+                          </div>
+                        </div>
+                      ))}
+                      {selectedReport.images.length === 0 && (!selectedReport.videos || selectedReport.videos.length === 0) && (
                         <div className="col-span-2 p-8 rounded-3xl border-2 border-dashed border-slate-100 flex flex-col items-center justify-center text-slate-300">
                           <FileText size={32} />
                           <span className="text-[10px] font-bold uppercase mt-2">No Visual Evidence</span>

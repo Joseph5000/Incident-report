@@ -4,15 +4,17 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Shield, List, History, Settings, Menu, Wifi, WifiOff, RefreshCcw, Fingerprint, Lock, Unlock, AlertCircle, LogOut } from 'lucide-react';
+import { Shield, List, History, Settings, Menu, Wifi, WifiOff, RefreshCcw, Fingerprint, Lock, Unlock, AlertCircle, LogOut, Radio, Activity } from 'lucide-react';
 import IncidentForm from './components/IncidentForm';
 import ReportHistory from './components/ReportHistory';
 import Login from './components/Login';
+import TacticalFeed from './components/TacticalFeed';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { isBiometricsAvailable, authenticateBiometrics, registerBiometrics } from './services/biometricService';
+import { UnitStatus } from './types';
 
-type ViewState = 'new' | 'history' | 'settings';
+type ViewState = 'feed' | 'new' | 'history' | 'settings';
 type ConnectionStatus = 'online' | 'offline' | 'syncing';
 
 export default function App() {
@@ -20,9 +22,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<{ badge: string; name: string } | null>(
     sessionStorage.getItem('shield_user') ? JSON.parse(sessionStorage.getItem('shield_user')!) : null
   );
-  const [view, setViewState] = useState<ViewState>('new');
+  const [view, setViewState] = useState<ViewState>('feed');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>(navigator.onLine ? 'online' : 'offline');
+  const [unitStatus, setUnitStatus] = useState<UnitStatus>('Available');
   const [isLocked, setIsLocked] = useState(false);
   const [biometricsActive, setBiometricsActive] = useState(localStorage.getItem('shield_biometrics') === 'true');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -173,7 +176,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {/* Mobile Header */}
-      <header className="h-20 border-b border-slate-100 flex items-center px-6 sticky top-0 bg-white/80 backdrop-blur-md z-40">
+      <header className="h-20 border-b border-slate-100 flex items-center px-6 sticky top-0 bg-white/80 backdrop-blur-md z-[150]">
         <button 
           onClick={() => setSidebarOpen(true)}
           className="p-2 text-slate-400 hover:text-slate-900 lg:hidden"
@@ -192,6 +195,15 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-100">
+               <div className={cn(
+                 "w-2 h-2 rounded-full",
+                 unitStatus === 'Available' ? "bg-green-500 animate-pulse" :
+                 unitStatus === 'En Route' ? "bg-blue-400" :
+                 unitStatus === 'On Scene' ? "bg-amber-400" : "bg-red-400"
+               )} />
+               <span className="text-[10px] font-black uppercase text-slate-600 tracking-tight">{unitStatus}</span>
+            </div>
             <div className="md:hidden">
               <StatusIndicator className="scale-75 origin-right" />
             </div>
@@ -215,23 +227,34 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setSidebarOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] lg:hidden"
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[190] lg:hidden"
             />
           )}
         </AnimatePresence>
 
         {/* Sidebar */}
         <aside className={cn(
-          "fixed inset-y-0 left-0 w-20 bg-slate-900 z-[70] transition-transform lg:relative lg:translate-x-0 flex flex-col items-center py-8 space-y-8 shadow-2xl lg:shadow-none",
+          "fixed inset-y-0 left-0 w-24 bg-slate-900 z-[200] transition-transform lg:relative lg:translate-x-0 flex flex-col items-center py-8 space-y-10 shadow-2xl lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}>
           <div className="space-y-6 flex flex-col items-center">
+            <button 
+              onClick={() => { setViewState('feed'); setSidebarOpen(false); }}
+              className={cn(
+                "p-3 rounded-xl transition-all",
+                view === 'feed' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/50" : "text-slate-400 hover:text-white"
+              )}
+              title="Tactical Feed"
+            >
+              <Radio size={24} />
+            </button>
             <button 
               onClick={() => { setViewState('new'); setSidebarOpen(false); }}
               className={cn(
                 "p-3 rounded-xl transition-all",
                 view === 'new' ? "bg-blue-600 text-white shadow-lg shadow-blue-900/50" : "text-slate-400 hover:text-white"
               )}
+              title="New Incident Report"
             >
               <Shield size={24} />
             </button>
@@ -241,21 +264,44 @@ export default function App() {
                 "p-3 rounded-xl transition-all",
                 view === 'history' ? "bg-blue-600 text-white shadow-lg shadow-blue-900/50" : "text-slate-400 hover:text-white"
               )}
+              title="Report History"
             >
               <History size={24} />
             </button>
+          </div>
+
+          <div className="space-y-6 flex flex-col items-center pt-8 border-t border-slate-800/50 w-full">
+             <div className="flex flex-col gap-3">
+                {(['Available', 'En Route', 'On Scene', 'Busy'] as UnitStatus[]).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setUnitStatus(s)}
+                    className={cn(
+                      "w-3 h-3 rounded-full transition-all border",
+                      unitStatus === s ? "scale-125 border-white shadow-[0_0_8px_currentColor]" : "border-transparent opacity-30 hover:opacity-100",
+                      s === 'Available' ? "bg-green-500 text-green-500" :
+                      s === 'En Route' ? "bg-blue-400 text-blue-400" :
+                      s === 'On Scene' ? "bg-amber-400 text-amber-400" :
+                      "bg-red-400 text-red-400"
+                    )}
+                    title={s}
+                  />
+                ))}
+             </div>
+             <div className="text-[8px] font-black text-slate-600 uppercase tracking-tighter vertical-text select-none">Status</div>
+          </div>
+
+          <div className="mt-auto space-y-4 flex flex-col items-center">
             <button 
               onClick={() => { setViewState('settings'); setSidebarOpen(false); }}
               className={cn(
                 "p-3 rounded-xl transition-all",
                 view === 'settings' ? "bg-blue-600 text-white shadow-lg shadow-blue-900/50" : "text-slate-400 hover:text-white"
               )}
+              title="Settings"
             >
               <Settings size={24} />
             </button>
-          </div>
-
-          <div className="mt-auto space-y-4 flex flex-col items-center">
             <button 
               onClick={handleLogout}
               className="p-3 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
@@ -280,6 +326,7 @@ export default function App() {
               transition={{ duration: 0.3 }}
               className="h-full"
             >
+              {view === 'feed' && <TacticalFeed />}
               {view === 'new' && <IncidentForm />}
               {view === 'history' && <ReportHistory />}
               {view === 'settings' && (
@@ -389,7 +436,7 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-slate-900 flex flex-col items-center justify-center p-8 text-center"
+            className="fixed inset-0 z-[300] bg-slate-900 flex flex-col items-center justify-center p-8 text-center"
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }}
