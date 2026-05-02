@@ -45,7 +45,14 @@ export default function Map({ center, accuracy, zoom = 15 }: MapProps) {
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          crossOrigin={true}
         />
+        <div className="absolute bottom-4 left-4 z-[1000] pointer-events-none">
+          <div className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-full border border-slate-200 shadow-sm flex items-center gap-2">
+            <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+            <span className="text-[9px] font-black uppercase tracking-widest text-slate-600">Maps Cached for Offline</span>
+          </div>
+        </div>
         <Marker position={center}>
           <Popup>
             Incident Verified

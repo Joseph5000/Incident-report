@@ -22,6 +22,15 @@ export interface InvolvementRecord {
   contact?: string;
 }
 
+export interface WitnessRecord {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+  statement: string;
+  timestamp: string;
+}
+
 export interface VehicleRecord {
   id: string;
   plate: string;
@@ -54,6 +63,7 @@ export interface IncidentReport {
   location: LocationData;
   images: string[]; 
   videos?: VideoEvidence[];
+  witnesses?: WitnessRecord[];
   signatures: { name: string; type: string; data: string }[];
   involvement: InvolvementRecord[];
   vehicles: VehicleRecord[];

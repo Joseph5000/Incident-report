@@ -34,6 +34,7 @@ export default function IncidentForm() {
     vehicles: [],
     audioNotes: [],
     videos: [],
+    witnesses: [],
     status: 'draft',
     createdAt: new Date().toISOString(),
     location: {
@@ -45,13 +46,16 @@ export default function IncidentForm() {
   });
 
   const [isProcessing, setIsProcessing] = useState(false);
+  const [locationSource, setLocationSource] = useState<'gps' | 'exif' | 'manual'>('gps');
   const [currentAddress, setCurrentAddress] = useState('Acquiring location...');
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   const [showInvolvementModal, setShowInvolvementModal] = useState(false);
   const [showVehicleModal, setShowVehicleModal] = useState(false);
+  const [showWitnessModal, setShowWitnessModal] = useState(false);
   const [currentParty, setCurrentParty] = useState({ name: '', type: 'Involved Party' });
   const [involvementForm, setInvolvementForm] = useState({ name: '', type: 'Suspect' as const, description: '', contact: '', dob: '' });
   const [vehicleForm, setVehicleForm] = useState({ plate: '', make: '', model: '', color: '', notes: '' });
+  const [witnessForm, setWitnessForm] = useState({ name: '', phone: '', address: '', statement: '' });
   const [signatureStep, setSignatureStep] = useState<'info' | 'pad'>('info');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,6 +66,7 @@ export default function IncidentForm() {
   const [lpProcessingProgress, setLpProcessingProgress] = useState(0);
   const [ocrProcessingIdx, setOcrProcessingIdx] = useState<number | null>(null);
   const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrResult, setOcrResult] = useState<{ text: string, idx: number } | null>(null);
 
   // Speech Recognition State
   const [isListening, setIsListening] = useState<string | null>(null);
@@ -143,13 +148,7 @@ export default function IncidentForm() {
       const cleanedText = text.trim();
       
       if (cleanedText) {
-        const confirmAppend = window.confirm(`Extracted Text:\n\n"${cleanedText.slice(0, 200)}..."\n\nAppend this to the Incident Description?`);
-        if (confirmAppend) {
-          setReport(prev => ({
-            ...prev,
-            description: prev.description + `\n\n[OCR EXTRACTED TEXT - CLIP ${idx + 1}]:\n${cleanedText}`
-          }));
-        }
+        setOcrResult({ text: cleanedText, idx });
       } else {
         alert('No legible text detected in this image.');
       }
@@ -365,6 +364,9 @@ export default function IncidentForm() {
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
+        // Only update if we are in GPS tracking mode
+        if (locationSource !== 'gps') return;
+
         setReport(prev => ({
           ...prev,
           location: {
@@ -381,7 +383,7 @@ export default function IncidentForm() {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+  }, [locationSource]);
 
   const validateForm = () => {
     const newErrors: { [key: string]: string } = {};
@@ -429,22 +431,26 @@ export default function IncidentForm() {
 
     for (const file of Array.from(files)) {
       try {
-        // 1. Extract EXIF (optional, don't fail the whole image if it fails)
+        // 1. Extract EXIF (GPS and Timestamp)
         try {
-          const metadata = await exifr.gps(file);
-          const timestampData = await exifr.parse(file, ['DateTimeOriginal']);
+          const exifData = await exifr.parse(file, {
+            gps: true,
+            pick: ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate', 'ModifyDate']
+          });
 
-          if (metadata && metadata.latitude && metadata.longitude) {
+          if (exifData && exifData.latitude && exifData.longitude) {
+            const photoDate = exifData.DateTimeOriginal || exifData.CreateDate || exifData.ModifyDate;
             newLocation = {
               ...newLocation,
-              latitude: metadata.latitude,
-              longitude: metadata.longitude,
-              timestamp: timestampData?.DateTimeOriginal?.toISOString() || newLocation.timestamp
+              latitude: exifData.latitude,
+              longitude: exifData.longitude,
+              timestamp: photoDate instanceof Date ? photoDate.toISOString() : (photoDate || newLocation.timestamp)
             };
             locationUpdated = true;
+            setLocationSource('exif');
           }
         } catch (exifErr) {
-          console.warn('EXIF capture skipped:', exifErr);
+          console.warn('EXIF extraction skipped or failed for file:', file.name, exifErr);
         }
 
         // 2. Read file as Base64 for preview
@@ -503,6 +509,7 @@ export default function IncidentForm() {
         vehicles: [],
         audioNotes: [],
         videos: [],
+        witnesses: [],
         status: 'draft',
         createdAt: new Date().toISOString(),
         location: { 
@@ -1040,6 +1047,58 @@ export default function IncidentForm() {
             </div>
           </div>
 
+          {/* Witnesses Section */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                <User size={12} className="text-blue-500" /> Witness Statements
+              </label>
+              <button 
+                onClick={() => setShowWitnessModal(true)}
+                className="text-blue-600 font-bold text-[10px] hover:underline"
+              >
+                + ADD WITNESS
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              {report.witnesses?.length === 0 ? (
+                <div className="p-8 border-2 border-dashed border-slate-100 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">No witness statements recorded</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2">
+                  {report.witnesses?.map((witness) => (
+                    <div key={witness.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col gap-3 group">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                           <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center text-white">
+                             <User size={14} />
+                           </div>
+                           <div>
+                             <p className="text-xs font-black text-slate-800 uppercase tracking-tight">{witness.name}</p>
+                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{witness.phone} • {witness.address.slice(0, 30)}...</p>
+                           </div>
+                        </div>
+                        <button 
+                          onClick={() => setReport(prev => ({ ...prev, witnesses: prev.witnesses?.filter(w => w.id !== witness.id) }))}
+                          className="p-2 text-slate-300 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      <div className="p-3 bg-white/50 border border-slate-100 rounded-xl">
+                        <p className="text-[10px] text-slate-500 italic font-medium leading-relaxed">
+                          "{witness.statement}"
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Vehicles Section */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm">
             <div className="flex items-center justify-between">
@@ -1133,7 +1192,18 @@ export default function IncidentForm() {
               </div>
             </div>
 
-            <div className="flex-1 min-h-[300px] rounded-2xl overflow-hidden border border-slate-100">
+            <div className="flex-1 min-h-[300px] rounded-2xl overflow-hidden border border-slate-100 relative">
+              {locationSource === 'exif' && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]">
+                  <button 
+                    type="button"
+                    onClick={() => setLocationSource('gps')}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-2 text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all border border-blue-500 whitespace-nowrap"
+                  >
+                    <Clock size={12} /> Sync with Live GPS
+                  </button>
+                </div>
+              )}
               <Map 
                 center={[report.location?.latitude || 14.5995, report.location?.longitude || 120.9842]} 
                 accuracy={report.location?.accuracy}
@@ -1141,7 +1211,9 @@ export default function IncidentForm() {
             </div>
             
             <button 
+              type="button"
               onClick={() => {
+                setLocationSource('gps');
                 navigator.geolocation.getCurrentPosition((pos) => {
                   setReport(prev => ({
                     ...prev,
@@ -1240,6 +1312,106 @@ export default function IncidentForm() {
                    setInvolvementForm({ name: '', type: 'Suspect', description: '', contact: '', dob: '' });
                  }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Add Record</button>
                </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showWitnessModal && (
+          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-8 space-y-6">
+               <h3 className="text-xl font-bold italic">Capture Witness Statement</h3>
+               <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Witness Full Name</label>
+                    <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={witnessForm.name} onChange={e => setWitnessForm({...witnessForm, name: e.target.value})} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Phone Number</label>
+                      <input type="tel" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={witnessForm.phone} onChange={e => setWitnessForm({...witnessForm, phone: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Address</label>
+                      <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm" value={witnessForm.address} onChange={e => setWitnessForm({...witnessForm, address: e.target.value})} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Official Statement / Notes</label>
+                    <textarea rows={4} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm resize-none" value={witnessForm.statement} onChange={e => setWitnessForm({...witnessForm, statement: e.target.value})} placeholder="What did the witness observe? Include key tactical details..." />
+                  </div>
+               </div>
+               <div className="flex gap-4">
+                 <button onClick={() => setShowWitnessModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
+                 <button onClick={() => {
+                   setReport(prev => ({ ...prev, witnesses: [...(prev.witnesses || []), { ...witnessForm, id: crypto.randomUUID(), timestamp: new Date().toISOString() }] }));
+                   setShowWitnessModal(false);
+                   setWitnessForm({ name: '', phone: '', address: '', statement: '' });
+                 }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Save Statement</button>
+               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {ocrResult && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xl">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl overflow-hidden"
+            >
+              <div className="bg-indigo-600 p-8 flex items-center justify-between text-white">
+                <div className="flex items-center gap-4">
+                   <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                     <Scan size={24} />
+                   </div>
+                   <div>
+                     <h3 className="text-xl font-black uppercase tracking-tighter italic">OCR Text Extraction</h3>
+                     <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Review and append to narrative</p>
+                   </div>
+                </div>
+                <button onClick={() => setOcrResult(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-8 space-y-6">
+                <div className="flex gap-6">
+                  <div className="w-32 aspect-square rounded-2xl overflow-hidden border border-slate-100 shrink-0">
+                    <img src={report.images?.[ocrResult.idx]} alt="OCR Source" className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+                       <FileText size={12} className="text-indigo-500" /> Extracted Intelligence
+                    </label>
+                    <textarea 
+                      className="w-full bg-slate-50 border border-slate-200 rounded-3xl p-6 text-sm font-medium leading-relaxed italic text-slate-700 min-h-[200px] resize-none focus:ring-4 focus:ring-indigo-100 transition-all outline-none"
+                      value={ocrResult.text}
+                      onChange={(e) => setOcrResult({ ...ocrResult, text: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button 
+                    onClick={() => setOcrResult(null)}
+                    className="flex-1 py-5 rounded-3xl text-slate-400 font-black uppercase tracking-widest text-[11px] hover:text-slate-900 transition-colors"
+                  >
+                    Discard Scan
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setReport(prev => ({
+                        ...prev,
+                        description: (prev.description ? prev.description + '\n\n' : '') + `[INTEL ATTACHMENT - CLIP ${ocrResult.idx + 1}]:\n${ocrResult.text}`
+                      }));
+                      setOcrResult(null);
+                    }}
+                    className="flex-[2] py-5 bg-indigo-600 text-white rounded-3xl font-black uppercase tracking-widest text-[11px] shadow-xl hover:bg-indigo-500 transition-all flex items-center justify-center gap-3"
+                  >
+                    <CheckCircle size={16} /> Append to Narrative
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}

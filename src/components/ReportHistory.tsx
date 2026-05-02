@@ -501,6 +501,39 @@ export default function ReportHistory() {
                 </section>
 
                 <section className="space-y-6">
+                  <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Witness Statements</h4>
+                  <div className="grid gap-4">
+                    {selectedReport.witnesses?.map((witness) => (
+                      <div key={witness.id} className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
+                              <User size={20} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800 leading-none">{witness.name}</p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">{witness.phone} • {witness.address}</p>
+                            </div>
+                          </div>
+                          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                            {new Date(witness.timestamp).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 italic text-slate-600 text-sm leading-relaxed">
+                          "{witness.statement}"
+                        </div>
+                      </div>
+                    ))}
+                    {(!selectedReport.witnesses || selectedReport.witnesses.length === 0) && (
+                      <div className="p-8 rounded-3xl border-2 border-dashed border-slate-100 flex flex-col items-center justify-center text-slate-300">
+                        <FileText size={32} />
+                        <span className="text-[10px] font-bold uppercase mt-2">Zero Witness records Captured</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="space-y-6">
                   <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Authorized Signatures</h4>
                   <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {selectedReport.signatures.map((sig, i) => (
