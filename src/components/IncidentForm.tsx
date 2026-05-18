@@ -6,19 +6,32 @@
 import React, { useState, useRef, useEffect } from 'react';
 import exifr from 'exifr';
 import { createWorker } from 'tesseract.js';
-import { Camera, MapPin, Clock, FileText, Upload, CheckCircle, AlertCircle, Trash2, X, PenTool, UserPlus, User, Car, Mic, MicOff, Square, Volume2, Play, Scan, Video, VideoOff } from 'lucide-react';
+import { Camera, MapPin, Clock, FileText, Upload, CheckCircle, Activity, RefreshCcw, AlertCircle, Trash2, X, PenTool, UserPlus, User as UserIcon, Car, Mic, MicOff, Square, Volume2, Play, Scan, Video, VideoOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import Map from './Map';
 import SignaturePad from './SignaturePad';
 import { reverseGeocode } from '../lib/geocoding';
 import { saveDraft, setFormDraft, getFormDraft, clearFormDraft } from '../lib/db';
-import { IncidentReport, LocationData } from '../types';
+import { IncidentReport, LocationData, User } from '../types';
 import { cn } from '../lib/utils';
+import { analyzeIncidentMedia, generateNarrative, suggestIncidentType } from '../services/geminiService';
+import { exportReportPDF } from '../services/pdfService';
 
-export default function IncidentForm() {
+const uuid = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+};
+
+interface IncidentFormProps {
+  currentUser: User | null;
+}
+
+export default function IncidentForm({ currentUser }: IncidentFormProps) {
   const [report, setReport] = useState<Partial<IncidentReport>>({
-    tempId: crypto.randomUUID(),
+    tempId: uuid(),
     type: 'Vehicle Accident',
     description: '',
     officerNotes: '',
@@ -67,6 +80,11 @@ export default function IncidentForm() {
   const [ocrProcessingIdx, setOcrProcessingIdx] = useState<number | null>(null);
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrResult, setOcrResult] = useState<{ text: string, idx: number } | null>(null);
+
+  // AI Assistant State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<{ damageType: string; severity: string; identifiedItems: string[] } | null>(null);
+  const [isGeneratingNarrative, setIsGeneratingNarrative] = useState(false);
 
   // Speech Recognition State
   const [isListening, setIsListening] = useState<string | null>(null);
@@ -163,6 +181,44 @@ export default function IncidentForm() {
     }
   };
 
+  const handleAIAnalysis = async () => {
+    if (!report.images || report.images.length === 0) {
+      alert("Capture at least one piece of evidence for AI analysis.");
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    try {
+      const result = await analyzeIncidentMedia(report.images);
+      if (result) {
+        setAiAnalysis(result);
+      }
+    } catch (err) {
+      console.error("AI Analysis Failed", err);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleSmartNarrative = async () => {
+    if (!report.description || report.description.length < 10) {
+      alert("Enter a brief description first for the AI to expand upon.");
+      return;
+    }
+
+    setIsGeneratingNarrative(true);
+    try {
+      const result = await generateNarrative(report.description, report.officerNotes);
+      if (result) {
+        setReport(prev => ({ ...prev, description: result }));
+      }
+    } catch (err) {
+      console.error("Narrative Generation Failed", err);
+    } finally {
+      setIsGeneratingNarrative(false);
+    }
+  };
+
   const handleLPScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -239,7 +295,7 @@ export default function IncidentForm() {
             videos: [
               ...(prev.videos || []),
               {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 data: base64data,
                 timestamp: new Date().toISOString()
               }
@@ -293,7 +349,7 @@ export default function IncidentForm() {
             audioNotes: [
               ...(prev.audioNotes || []),
               {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 data: base64data,
                 duration: recordingTime,
                 timestamp: new Date().toISOString()
@@ -351,6 +407,25 @@ export default function IncidentForm() {
     }
   }, [report]);
 
+  // AI Auto-categorization
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (report.description && report.description.length > 50) {
+        try {
+          const suggestedType = await suggestIncidentType(report.description);
+          const validTypes = ["Vehicle Accident", "Hit and Run", "Vehicle Impound", "Traffic Obstruction", "Public Disturbance", "Other / Assist"];
+          if (suggestedType && validTypes.includes(suggestedType) && suggestedType !== report.type) {
+            setReport(prev => ({ ...prev, type: suggestedType }));
+          }
+        } catch (err) {
+          console.warn("Auto-categorization failed", err);
+        }
+      }
+    }, 3000); // Debounce AI call
+
+    return () => clearTimeout(timer);
+  }, [report.description]);
+
   // Sync address on coordinate change
   useEffect(() => {
     if (report.location?.latitude && report.location?.longitude) {
@@ -370,12 +445,12 @@ export default function IncidentForm() {
         setReport(prev => ({
           ...prev,
           location: {
-            ...prev.location!,
+            ...(prev.location || {}),
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
             timestamp: new Date().toISOString()
-          }
+          } as LocationData
         }));
       },
       (err) => console.error('GPS Watch Error:', err),
@@ -410,11 +485,13 @@ export default function IncidentForm() {
     setReport(prev => ({
       ...prev,
       location: {
-        ...prev.location!,
+        ...(prev.location || {}),
+        latitude: lat,
+        longitude: lon,
         address: data.address,
         barangay: data.barangay,
         city: data.city
-      }
+      } as LocationData
     }));
   };
 
@@ -486,14 +563,19 @@ export default function IncidentForm() {
     setIsProcessing(true);
     // Simulate API call
     setTimeout(async () => {
-      const finalReport = { ...report, status: 'submitted' as const };
+      const finalReport = { 
+        ...report, 
+        status: currentUser?.role === 'Supervisor' ? 'approved' : 'pending' as const,
+        submittedBy: currentUser?.badgeNumber,
+        updatedAt: new Date().toISOString()
+      };
       await saveDraft(finalReport as IncidentReport);
       await clearFormDraft();
       alert('Report submitted successfully to central database.');
       setIsProcessing(false);
       // Reset form
       setReport({
-        tempId: crypto.randomUUID(),
+        tempId: uuid(),
         type: 'Vehicle Accident',
         description: '',
         officerNotes: '',
@@ -536,6 +618,12 @@ export default function IncidentForm() {
           </p>
         </div>
         <div className="flex items-center gap-3 text-right">
+           <button 
+             onClick={() => exportReportPDF(report as IncidentReport)}
+             className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl hover:bg-slate-800 transition-all"
+           >
+             <FileText size={14} /> Export PDF
+           </button>
            <div className="hidden sm:block">
              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Incident Timestamp</p>
              <p className="text-sm font-mono text-slate-600 font-medium">{format(new Date(report.location!.timestamp), 'yyyy-MM-dd HH:mm:ss')} UTC</p>
@@ -573,6 +661,21 @@ export default function IncidentForm() {
                 Evidence Collection {errors.images && "• REQUIRED"}
               </label>
               <div className="flex items-center gap-4">
+                <button 
+                  onClick={handleAIAnalysis}
+                  disabled={isAnalyzing || !report.images?.length}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                    isAnalyzing ? "bg-amber-100 text-amber-600" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                  )}
+                >
+                  {isAnalyzing ? (
+                    <RefreshCcw size={12} className="animate-spin" />
+                  ) : (
+                    <Activity size={12} />
+                  )}
+                  {isAnalyzing ? "Analyzing..." : "AI Intelligence"}
+                </button>
                 {!isRecordingVideo ? (
                   <button 
                     onClick={startVideoRecording}
@@ -597,6 +700,47 @@ export default function IncidentForm() {
               </div>
             </div>
             
+            {aiAnalysis && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-5 bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl text-white space-y-3 shadow-xl relative overflow-hidden"
+              >
+                <div className="absolute top-0 right-0 p-4 opacity-10">
+                  <Activity size={80} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle size={16} className="text-blue-300" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">AI Intelligence Assessment</span>
+                  </div>
+                  <button onClick={() => setAiAnalysis(null)} className="p-1 hover:bg-white/10 rounded-full transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[8px] font-bold text-blue-200 uppercase tracking-tighter">Severity Index</p>
+                    <p className="text-sm font-black">{aiAnalysis.severity}</p>
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-bold text-blue-200 uppercase tracking-tighter">Damage Type</p>
+                    <p className="text-sm font-black">{aiAnalysis.damageType}</p>
+                  </div>
+                </div>
+                <div>
+                   <p className="text-[8px] font-bold text-blue-200 uppercase tracking-tighter mb-1">Identified Assets</p>
+                   <div className="flex flex-wrap gap-2">
+                     {aiAnalysis.identifiedItems.map((item, i) => (
+                       <span key={i} className="px-2 py-1 bg-white/10 backdrop-blur-md rounded-lg text-[9px] font-black">
+                         {item}
+                       </span>
+                     ))}
+                   </div>
+                </div>
+              </motion.div>
+            )}
+
             <div className="grid grid-cols-3 gap-3">
               <AnimatePresence>
                 {report.images?.map((img, idx) => (
@@ -608,28 +752,30 @@ export default function IncidentForm() {
                     className="relative aspect-square rounded-2xl overflow-hidden border border-slate-100 bg-slate-50 group"
                   >
                     <img src={img} alt="Evidence" className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
+                    <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                        {ocrProcessingIdx === idx ? (
-                         <div className="flex flex-col items-center gap-1">
-                           <div className="w-10 h-10 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                           <span className="text-[8px] font-black text-white uppercase tracking-widest">{ocrProgress}%</span>
+                         <div className="flex-1 bg-white/90 backdrop-blur-md rounded-xl p-1.5 flex items-center gap-2">
+                           <div className="w-4 h-4 border-2 border-slate-200 border-t-indigo-600 rounded-full animate-spin" />
+                           <span className="text-[10px] font-black text-slate-800 uppercase tracking-widest">{ocrProgress}%</span>
                          </div>
                        ) : (
-                         <div className="flex items-center gap-2">
+                         <>
                            <button 
                              onClick={() => handleGeneralOCR(idx)}
                              title="Extract Text (OCR)"
-                             className="bg-indigo-600 text-white p-2 rounded-xl shadow-xl hover:bg-indigo-500 transition-colors"
+                             className="flex-1 bg-indigo-600/90 backdrop-blur-md text-white py-2 rounded-xl shadow-lg border border-indigo-500/50 hover:bg-indigo-600 transition-all flex items-center justify-center gap-1.5"
                            >
                              <Scan size={14} />
+                             <span className="text-[9px] font-black uppercase tracking-widest">OCR</span>
                            </button>
                            <button 
                              onClick={() => setReport(prev => ({ ...prev, images: prev.images?.filter((_, i) => i !== idx) }))}
-                             className="bg-white text-slate-900 p-2 rounded-xl shadow-xl hover:bg-slate-100 transition-colors"
+                             className="bg-white/90 backdrop-blur-md text-slate-900 p-2 rounded-xl shadow-lg border border-slate-200 hover:bg-white transition-all"
                            >
                              <Trash2 size={14} />
                            </button>
-                         </div>
+                         </>
                        )}
                     </div>
                   </motion.div>
@@ -795,19 +941,33 @@ export default function IncidentForm() {
                 )}>
                   Officer Summary {errors.description && "• REQUIRED"}
                 </label>
-                <button
-                  type="button"
-                  onClick={() => toggleListening('description')}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
-                    isListening === 'description' 
-                      ? "bg-red-500 text-white animate-pulse" 
-                      : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                  )}
-                >
-                  {isListening === 'description' ? <MicOff size={10} /> : <Mic size={10} />}
-                  {isListening === 'description' ? "Listening..." : "Dictate"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={handleSmartNarrative}
+                    disabled={isGeneratingNarrative || !report.description}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all shadow-sm",
+                      isGeneratingNarrative ? "bg-slate-100 text-slate-400 font-bold" : "bg-slate-900 text-white hover:bg-slate-800"
+                    )}
+                  >
+                    {isGeneratingNarrative ? <RefreshCcw size={10} className="animate-spin" /> : <PenTool size={10} />}
+                    {isGeneratingNarrative ? "Generating..." : "Smart Assistant"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleListening('description')}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                      isListening === 'description' 
+                        ? "bg-red-500 text-white animate-pulse" 
+                        : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                    )}
+                  >
+                    {isListening === 'description' ? <MicOff size={10} /> : <Mic size={10} />}
+                    {isListening === 'description' ? "Listening..." : "Dictate"}
+                  </button>
+                </div>
               </div>
               <textarea 
                 value={report.description}
@@ -1027,7 +1187,7 @@ export default function IncidentForm() {
                            person.type === 'Suspect' ? "bg-red-500" :
                            person.type === 'Witness' ? "bg-blue-500" : "bg-slate-500"
                          )}>
-                           <User size={14} />
+                           <UserIcon size={14} />
                          </div>
                          <div>
                            <p className="text-xs font-black text-slate-800 uppercase tracking-tight">{person.name}</p>
@@ -1051,7 +1211,7 @@ export default function IncidentForm() {
           <div className="bg-white p-6 rounded-3xl border border-slate-200 space-y-6 shadow-sm">
             <div className="flex items-center justify-between">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                <User size={12} className="text-blue-500" /> Witness Statements
+                <UserIcon size={12} className="text-blue-500" /> Witness Statements
               </label>
               <button 
                 onClick={() => setShowWitnessModal(true)}
@@ -1073,11 +1233,11 @@ export default function IncidentForm() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                            <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center text-white">
-                             <User size={14} />
+                             <UserIcon size={14} />
                            </div>
                            <div>
                              <p className="text-xs font-black text-slate-800 uppercase tracking-tight">{witness.name}</p>
-                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{witness.phone} • {witness.address.slice(0, 30)}...</p>
+                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{witness.phone} • {witness.address?.slice(0, 30)}...</p>
                            </div>
                         </div>
                         <button 
@@ -1307,7 +1467,7 @@ export default function IncidentForm() {
                <div className="flex gap-4">
                  <button onClick={() => setShowInvolvementModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
                  <button onClick={() => {
-                   setReport(prev => ({ ...prev, involvement: [...(prev.involvement || []), { ...involvementForm, id: crypto.randomUUID() }] }));
+                   setReport(prev => ({ ...prev, involvement: [...(prev.involvement || []), { ...involvementForm, id: uuid() }] }));
                    setShowInvolvementModal(false);
                    setInvolvementForm({ name: '', type: 'Suspect', description: '', contact: '', dob: '' });
                  }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Add Record</button>
@@ -1343,7 +1503,7 @@ export default function IncidentForm() {
                <div className="flex gap-4">
                  <button onClick={() => setShowWitnessModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
                  <button onClick={() => {
-                   setReport(prev => ({ ...prev, witnesses: [...(prev.witnesses || []), { ...witnessForm, id: crypto.randomUUID(), timestamp: new Date().toISOString() }] }));
+                   setReport(prev => ({ ...prev, witnesses: [...(prev.witnesses || []), { ...witnessForm, id: uuid(), timestamp: new Date().toISOString() }] }));
                    setShowWitnessModal(false);
                    setWitnessForm({ name: '', phone: '', address: '', statement: '' });
                  }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Save Statement</button>
@@ -1468,7 +1628,7 @@ export default function IncidentForm() {
                <div className="flex gap-4">
                  <button onClick={() => setShowVehicleModal(false)} className="flex-1 text-slate-400 text-xs font-bold uppercase tracking-widest">Cancel</button>
                  <button onClick={() => {
-                   setReport(prev => ({ ...prev, vehicles: [...(prev.vehicles || []), { ...vehicleForm, id: crypto.randomUUID() }] }));
+                   setReport(prev => ({ ...prev, vehicles: [...(prev.vehicles || []), { ...vehicleForm, id: uuid() }] }));
                    setShowVehicleModal(false);
                    setVehicleForm({ plate: '', make: '', model: '', color: '', notes: '' });
                  }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px]">Log Vehicle</button>

@@ -8,8 +8,11 @@ import { Shield, Lock, ChevronRight, AlertCircle, Fingerprint, Key } from 'lucid
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
+import { User } from '../types';
+import { saveAuditLog } from '../lib/db';
+
 interface LoginProps {
-  onLogin: (badgeNumber: string) => void;
+  onLogin: (user: User) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
@@ -24,11 +27,33 @@ export default function Login({ onLogin }: LoginProps) {
     setIsSubmitting(true);
 
     // Mock validation: In a real app, this would verify against a backend
-    // For this tactical demo, any non-empty badge and '1234' works, 
-    // or we can allow the UI to look functional with a specific badge.
-    setTimeout(() => {
-      if (badgeNumber.length >= 4 && passcode === 'SHIELD') {
-        onLogin(badgeNumber);
+    setTimeout(async () => {
+      if (passcode === 'SHIELD') {
+        const isSupervisor = badgeNumber.startsWith('S');
+        const isAdmin = badgeNumber.startsWith('A');
+        
+        let role: User['role'] = 'Officer';
+        if (isAdmin) role = 'Admin';
+        else if (isSupervisor) role = 'Supervisor';
+
+        const user: User = {
+          badgeNumber,
+          name: isAdmin ? `Admin ${badgeNumber}` : isSupervisor ? `Sup. ${badgeNumber}` : `Ofc. ${badgeNumber}`,
+          role
+        };
+        
+        // Audit log
+        await saveAuditLog({
+          id: Math.random().toString(36).substring(7),
+          action: 'LOGIN',
+          entityType: 'USER',
+          entityId: badgeNumber,
+          details: `User session established: ${role} access granted.`,
+          performedBy: badgeNumber,
+          timestamp: new Date().toISOString()
+        });
+
+        onLogin(user);
       } else {
         setError("AUTHENTICATION_FAILED: Invalid Credentials or Revoked Badge.");
         setIsSubmitting(false);
@@ -90,9 +115,12 @@ export default function Login({ onLogin }: LoginProps) {
                     required
                   />
                 </div>
-                <div className="flex justify-between px-1">
-                  <span className="text-[9px] text-slate-500">HINT: USE 'SHIELD'</span>
-                  <button type="button" className="text-[9px] text-blue-500 hover:underline font-bold uppercase tracking-tight">Forgot ID?</button>
+                <div className="flex flex-col gap-1 px-1">
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-slate-500 uppercase tracking-tighter">Code: SHIELD</span>
+                    <button type="button" className="text-[9px] text-blue-500 hover:underline font-bold uppercase tracking-tighter">Reset</button>
+                  </div>
+                  <p className="text-[8px] text-slate-600 uppercase tracking-[0.1em]">Use 'S' prefix for Supervisor or 'A' for Admin Access</p>
                 </div>
               </div>
             </div>

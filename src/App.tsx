@@ -9,17 +9,20 @@ import IncidentForm from './components/IncidentForm';
 import ReportHistory from './components/ReportHistory';
 import Login from './components/Login';
 import TacticalFeed from './components/TacticalFeed';
+import Dashboard from './components/Dashboard';
+import AdminPanel from './components/AdminPanel';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { isBiometricsAvailable, authenticateBiometrics, registerBiometrics } from './services/biometricService';
-import { UnitStatus } from './types';
+import { UnitStatus, User } from './types';
+import { ShieldAlert } from 'lucide-react';
 
-type ViewState = 'feed' | 'new' | 'history' | 'settings';
+type ViewState = 'feed' | 'dashboard' | 'new' | 'history' | 'settings' | 'admin';
 type ConnectionStatus = 'online' | 'offline' | 'syncing';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(sessionStorage.getItem('shield_auth') === 'true');
-  const [currentUser, setCurrentUser] = useState<{ badge: string; name: string } | null>(
+  const [currentUser, setCurrentUser] = useState<User | null>(
     sessionStorage.getItem('shield_user') ? JSON.parse(sessionStorage.getItem('shield_user')!) : null
   );
   const [view, setViewState] = useState<ViewState>('feed');
@@ -38,8 +41,7 @@ export default function App() {
     }
   }, [isAuthenticated]);
 
-  const handleLogin = (badge: string) => {
-    const user = { badge, name: "Officer Joseph" }; // In real app, name would come from badge lookup
+  const handleLogin = (user: User) => {
     setIsAuthenticated(true);
     setCurrentUser(user);
     sessionStorage.setItem('shield_auth', 'true');
@@ -211,7 +213,16 @@ export default function App() {
               <StatusIndicator />
               <div className="text-right border-l border-slate-100 pl-4 h-8 flex flex-col justify-center">
                 <p className="text-xs font-bold text-slate-700">{currentUser?.name}</p>
-                <p className="text-[10px] text-slate-400 tracking-wider">Badge #{currentUser?.badge}</p>
+                <div className="flex items-center justify-end gap-1">
+                  <span className={cn(
+                    "text-[8px] font-black uppercase px-1 rounded",
+                    currentUser?.role === 'Supervisor' ? "bg-indigo-100 text-indigo-600" : 
+                    currentUser?.role === 'Admin' ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
+                  )}>
+                    {currentUser?.role}
+                  </span>
+                  <p className="text-[10px] text-slate-400 tracking-wider">#{currentUser?.badgeNumber}</p>
+                </div>
               </div>
             </div>
           </div>
@@ -248,6 +259,30 @@ export default function App() {
             >
               <Radio size={24} />
             </button>
+            {currentUser?.role === 'Supervisor' && (
+              <button 
+                onClick={() => { setViewState('dashboard'); setSidebarOpen(false); }}
+                className={cn(
+                  "p-3 rounded-xl transition-all",
+                  view === 'dashboard' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/50" : "text-slate-400 hover:text-white"
+                )}
+                title="Command Dashboard"
+              >
+                <Activity size={24} />
+              </button>
+            )}
+            {currentUser?.role === 'Admin' && (
+              <button 
+                onClick={() => { setViewState('admin'); setSidebarOpen(false); }}
+                className={cn(
+                  "p-3 rounded-xl transition-all",
+                  view === 'admin' ? "bg-red-600 text-white shadow-lg shadow-red-900/50" : "text-slate-400 hover:text-white"
+                )}
+                title="Admin Command Center"
+              >
+                <ShieldAlert size={24} />
+              </button>
+            )}
             <button 
               onClick={() => { setViewState('new'); setSidebarOpen(false); }}
               className={cn(
@@ -327,7 +362,9 @@ export default function App() {
               className="h-full"
             >
               {view === 'feed' && <TacticalFeed />}
-              {view === 'new' && <IncidentForm />}
+              {view === 'dashboard' && <Dashboard currentUser={currentUser} />}
+              {view === 'admin' && <AdminPanel currentUser={currentUser} />}
+              {view === 'new' && <IncidentForm currentUser={currentUser} />}
               {view === 'history' && <ReportHistory />}
               {view === 'settings' && (
                 <div className="p-12 max-w-2xl mx-auto space-y-12">

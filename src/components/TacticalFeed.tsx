@@ -9,12 +9,99 @@ import { AlertTriangle, Bell, Radio, User, Car, Clock, ChevronRight, Zap, Shield
 import { BoloAlert, TacticalFeedItem } from '../types';
 import { cn } from '../lib/utils';
 import { reverseGeocode } from '../lib/geocoding';
+import { getAllBolos, getAllFeedItems, saveBolo, saveFeedItem } from '../lib/db';
 
 export default function TacticalFeed() {
   const [location, setLocation] = useState<{lat: number, lon: number} | null>(null);
   const [areaInfo, setAreaInfo] = useState<{address: string, city: string, barangay: string} | null>(null);
   const [isLocating, setIsLocating] = useState(true);
   const [selectedBolo, setSelectedBolo] = useState<BoloAlert | null>(null);
+  const [sectorSummary, setSectorSummary] = useState<string>('Syncing tactical data...');
+  const [bolos, setBolos] = useState<BoloAlert[]>([]);
+  const [feedItems, setFeedItems] = useState<TacticalFeedItem[]>([]);
+
+  useEffect(() => {
+    const loadTacticalData = async () => {
+      let bData = await getAllBolos();
+      let fData = await getAllFeedItems();
+
+      const hasSeeded = localStorage.getItem('tactical_seeded');
+
+      // Seed ONLY if it's the first time the app is run
+      if (!hasSeeded) {
+        if (bData.length === 0) {
+          const seedBolos: BoloAlert[] = [
+            {
+              id: '1',
+              type: 'Vehicle',
+              title: 'Blue Sedan - Armed Suspect',
+              description: 'Vehicle involved in armed robbery. Plate: ABC-123. Last seen heading North.',
+              timestamp: new Date().toISOString(),
+              priority: 'Emergency'
+            },
+            {
+              id: '2',
+              type: 'Person',
+              title: 'Missing Elderly Female',
+              description: '82yo female, white hair, last seen wearing red sweater.',
+              timestamp: new Date().toISOString(),
+              priority: 'High'
+            }
+          ];
+          for (const b of seedBolos) await saveBolo(b);
+          bData = seedBolos;
+        }
+
+        if (fData.length === 0) {
+          const seedFeed: TacticalFeedItem[] = [
+            { id: '1', type: 'Dispatch', content: 'Unit 402 responding to 10-31 Code 3 in South Sector.', timestamp: '10:45 AM' },
+            { id: '2', type: 'Department', content: 'Shift briefing relocated to Central Precinct today.', timestamp: '09:30 AM' },
+            { id: '3', type: 'BOLO', content: 'New BOLO issued for 2018 Silver Ford F150.', timestamp: '11:02 AM' }
+          ];
+          for (const f of seedFeed) await saveFeedItem(f);
+          fData = seedFeed;
+        }
+        localStorage.setItem('tactical_seeded', 'true');
+      }
+
+      setBolos(bData);
+      setFeedItems(fData);
+    };
+    loadTacticalData();
+  }, []);
+
+  useEffect(() => {
+    const fetchSummary = async () => {
+      if (bolos.length === 0 && feedItems.length === 0) {
+        setSectorSummary('SITUATIONAL AWARENESS: No active tactical data for current sector. Signal parity normal.');
+        return;
+      }
+
+      const emergencyBolos = bolos.filter(b => b.priority === 'Emergency');
+      const highPriorityBolos = bolos.filter(b => b.priority === 'High');
+      const dispatchItems = feedItems.filter(f => f.type === 'Dispatch');
+
+      let summary = 'SITUATIONAL AWARENESS: ';
+      
+      if (emergencyBolos.length > 0) {
+        summary += `CRITICAL: ${emergencyBolos.length} Emergency BOLO(s) active. Immediate tactical vigilance required. `;
+      } else if (highPriorityBolos.length > 0) {
+        summary += `${highPriorityBolos.length} High-priority targets identified in sector. `;
+      } else {
+        summary += `${bolos.length} Active BOLO(s) recorded. `;
+      }
+
+      if (dispatchItems.length > 0) {
+        summary += `Sector radio traffic monitoring ${dispatchItems.length} active responses. `;
+      }
+
+      summary += `Current sector: ${areaInfo?.barangay || areaInfo?.city || 'Scanning...'}.`;
+
+      setSectorSummary(summary);
+    };
+    
+    fetchSummary();
+  }, [areaInfo, bolos, feedItems]);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -46,33 +133,26 @@ export default function TacticalFeed() {
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  const MOCK_BOLOS: BoloAlert[] = [
-    {
-      id: '1',
-      type: 'Vehicle',
-      title: 'Blue Sedan - Armed Suspect',
-      description: `Vehicle involved in armed robbery near ${areaInfo?.barangay || 'Current Area'}. Plate: ABC-123. Last seen heading North.`,
-      timestamp: new Date().toISOString(),
-      priority: 'Emergency'
-    },
-    {
-      id: '2',
-      type: 'Person',
-      title: 'Missing Elderly Female',
-      description: `82yo female, white hair, last seen wearing red sweater near ${areaInfo?.city || 'Local Boundary'}.`,
-      timestamp: new Date().toISOString(),
-      priority: 'High'
-    }
-  ];
-
-  const MOCK_FEED: TacticalFeedItem[] = [
-    { id: '1', type: 'Dispatch', content: `Unit 402 responding to 10-31 Code 3 in ${areaInfo?.barangay || 'Sector'}.`, timestamp: '10:45 AM' },
-    { id: '2', type: 'Department', content: `Shift briefing relocated to ${areaInfo?.city || 'Sector'} Precinct today.`, timestamp: '09:30 AM' },
-    { id: '3', type: 'BOLO', content: 'New BOLO issued for 2018 Silver Ford F150.', timestamp: '11:02 AM' }
-  ];
 
   return (
     <div className="p-4 md:p-12 max-w-5xl mx-auto space-y-12">
+      <motion.div 
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-indigo-600 p-6 rounded-[32px] text-white shadow-xl shadow-indigo-900/20 relative overflow-hidden group border border-indigo-500"
+      >
+        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
+          <Zap size={100} />
+        </div>
+        <div className="flex items-center gap-3 mb-2">
+          <Shield size={16} className="text-white" />
+          <span className="text-[10px] font-black uppercase tracking-[0.2em]">Live Sector Intelligence</span>
+        </div>
+        <p className="text-lg font-black italic leading-tight tracking-tight max-w-2xl">
+          {sectorSummary}
+        </p>
+      </motion.div>
+
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-1">
           <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tighter italic">Tactical Feed</h2>
@@ -119,7 +199,7 @@ export default function TacticalFeed() {
           </div>
           
           <div className="space-y-4">
-            {MOCK_BOLOS.map((bolo) => (
+            {bolos.map((bolo) => (
               <motion.div 
                 key={bolo.id}
                 layoutId={`bolo-card-${bolo.id}`}
@@ -172,7 +252,7 @@ export default function TacticalFeed() {
               <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Unit Activity</h3>
             </div>
             <div className="bg-slate-900 rounded-[32px] p-6 text-white shadow-2xl border border-slate-800 space-y-4">
-               {MOCK_FEED.map((item) => (
+               {feedItems.map((item) => (
                  <div key={item.id} className="flex gap-4 border-b border-slate-800/50 pb-4 last:border-0 last:pb-0">
                     <div className={cn(
                       "w-1 h-1 rounded-full mt-2 shrink-0",

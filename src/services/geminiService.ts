@@ -3,39 +3,96 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { IncidentReport } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-export async function generateIncidentSummary(report: IncidentReport): Promise<string> {
-  try {
-    const prompt = `
-      As a tactical incident analyst, provide a concise, high-level executive summary of the following incident report. 
-      Focus on the critical facts: Type, Location, Time, and a brief synthesis of the description.
-      Use professional, objective, and tactical language.
-      Keep it under 3 sentences.
+export async function analyzeIncidentMedia(images: string[]) {
+  if (images.length === 0) return null;
 
-      INCIDENT DATA:
-      Type: ${report.type}
-      Time: ${new Date(report.createdAt).toLocaleString()}
-      Location: ${report.location?.address || 'Unknown'}
-      Description: ${report.description}
-      Involved Parties: ${report.signatures.map(s => s.name).join(', ') || 'None listed'}
-      Audio Statements: ${report.audioNotes?.length || 0} clips recorded.
-    `;
+  try {
+    const parts = images.slice(0, 3).map(img => ({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: img.split(',')[1]
+      }
+    }));
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: prompt,
+      contents: {
+        parts: [
+          ...parts,
+          { text: "Analyze these evidence photos from a traffic incident. Identify visible damage, vehicle models if possible, and assess severity (Low/Medium/High). Return as JSON." }
+        ]
+      },
       config: {
-        systemInstruction: "You are a professional tactical incident analyst in a law enforcement agency. Your task is to summarize field reports into clear, actionable executive briefings.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            damageType: { type: Type.STRING, description: "Description of damage" },
+            severity: { type: Type.STRING, enum: ["Low", "Medium", "High"] },
+            identifiedItems: { 
+              type: Type.ARRAY, 
+              items: { type: Type.STRING },
+              description: "Vehicles or objects identified"
+            }
+          }
+        }
       }
     });
 
-    return response.text || "Summary unavailable.";
+    return JSON.parse(response.text);
   } catch (error) {
-    console.error("Gemini summary error:", error);
-    return "Failed to generate AI summary. Please review tactical logs manually.";
+    console.error("AI Analysis Error:", error);
+    return null;
+  }
+}
+
+export async function generateNarrative(rawDescription: string, officerNotes?: string) {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Draft a professional, formal police narrative based on these raw notes: "${rawDescription}". Officer notes: "${officerNotes || 'None'}". Ensure it follows official reporting standards (clear, objective, chronological).`,
+      config: {
+        systemInstruction: "You are an expert police report writer. Convert raw field notes into polished, objective chronological narratives."
+      }
+    });
+
+    return response.text;
+  } catch (error) {
+    console.error("Narrative Generation Error:", error);
+    return null;
+  }
+}
+
+export async function suggestIncidentType(description: string) {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Based on this description, categorize the incident into one of these types: "Vehicle Accident", "Hit and Run", "Vehicle Impound", "Traffic Obstruction", "Public Disturbance", "Other / Assist". Return ONLY the exact type name. Description: "${description}"`
+    });
+    return response.text?.trim();
+  } catch (error) {
+    console.error("Type Suggestion Error:", error);
+    return null;
+  }
+}
+
+export async function generateIncidentSummary(report: IncidentReport) {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Summarize this incident report into a single, professional one-sentence summary for a quick-view table. 
+      Type: ${report.type}
+      Location: ${report.location.address}
+      Description: "${report.description}"`,
+    });
+    return response.text?.trim();
+  } catch (error) {
+    console.error("Summary Generation Error:", error);
+    return report.description.slice(0, 50) + "...";
   }
 }

@@ -54,12 +54,21 @@ export interface VideoEvidence {
   timestamp: string;
 }
 
+export type UserRole = 'Officer' | 'Supervisor' | 'Admin';
+
+export interface User {
+  badgeNumber: string;
+  name: string;
+  role: UserRole;
+}
+
 export interface IncidentReport {
   id?: number;
   tempId: string;
   type: string;
   description: string;
   officerNotes?: string;
+  supervisorNotes?: string;
   location: LocationData;
   images: string[]; 
   videos?: VideoEvidence[];
@@ -74,8 +83,11 @@ export interface IncidentReport {
     reason: string;
     inventoryNotes: string;
   };
-  status: 'draft' | 'pending' | 'submitted';
+  status: 'draft' | 'pending' | 'submitted' | 'rejected' | 'approved';
+  submittedBy?: string; // Badge number
+  reviewedBy?: string; // Badge number
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface BoloAlert {
@@ -101,4 +113,14 @@ export interface ExifData {
   latitude?: number;
   longitude?: number;
   timestamp?: Date;
+}
+
+export interface AuditLog {
+  id: string;
+  action: 'CREATE' | 'DELETE' | 'UPDATE' | 'LOGIN';
+  entityType: 'BOLO' | 'FEED' | 'REPORT' | 'USER';
+  entityId: string;
+  details: string;
+  performedBy: string;
+  timestamp: string;
 }

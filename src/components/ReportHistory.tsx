@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { getAllReports, deleteReport } from '../lib/db';
 import { IncidentReport } from '../types';
-import { Trash2, MapPin, Calendar, Clock, AlertCircle, ChevronRight, FileText, X, User, Sparkles, Brain, Loader2, Shield, Volume2, Play, Car, Video, Search } from 'lucide-react';
+import { Trash2, MapPin, Calendar, Clock, AlertCircle, ChevronRight, FileText, X, User as UserIcon, Sparkles, Brain, Loader2, Shield, Volume2, Play, Car, Video, Search, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { generateIncidentSummary } from '../services/geminiService';
@@ -138,8 +138,9 @@ export default function ReportHistory() {
                   <div className="space-y-1">
                     <span className={cn(
                       "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border",
-                      report.status === 'submitted' ? "bg-green-50 text-green-700 border-green-100" : 
+                      report.status === 'approved' || report.status === 'submitted' ? "bg-green-50 text-green-700 border-green-100" : 
                       report.status === 'pending' ? "bg-amber-50 text-amber-700 border-amber-100" :
+                      report.status === 'rejected' ? "bg-red-50 text-red-700 border-red-100" :
                       "bg-blue-50 text-blue-700 border-blue-100"
                     )}>
                       {report.status}
@@ -239,11 +240,12 @@ export default function ReportHistory() {
             >
               <div className="p-6 md:p-10 border-b border-slate-100 flex items-start justify-between bg-slate-50/50">
                 <div className="space-y-3">
-                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3">
                     <span className={cn(
                       "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border",
-                      selectedReport.status === 'submitted' ? "bg-green-50 text-green-700 border-green-100" : 
+                      selectedReport.status === 'approved' || selectedReport.status === 'submitted' ? "bg-green-50 text-green-700 border-green-100" : 
                       selectedReport.status === 'pending' ? "bg-amber-50 text-amber-700 border-amber-100" :
+                      selectedReport.status === 'rejected' ? "bg-red-50 text-red-700 border-red-100" :
                       "bg-blue-50 text-blue-700 border-blue-100"
                     )}>
                       {selectedReport.status}
@@ -283,10 +285,24 @@ export default function ReportHistory() {
                         {selectedReport.officerNotes && (
                           <div className="space-y-4 pt-4 border-t border-slate-200">
                             <div className="flex items-center gap-2 text-[10px] font-black text-amber-600 uppercase tracking-widest">
-                               <Shield size={12} /> Internal Officer Notes
+                               <Shield size={12} /> Internal Officer Notes (Ofc. #{selectedReport.submittedBy})
                             </div>
                             <div className="bg-slate-100/50 p-6 rounded-2xl border border-slate-200/50 italic text-slate-600 text-sm leading-relaxed">
                               {selectedReport.officerNotes}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedReport.supervisorNotes && (
+                          <div className="space-y-4 pt-4 border-t border-slate-200">
+                            <div className="flex items-center gap-2 text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+                               <ShieldCheck size={12} /> Supervisor Action Log (Sgt. #{selectedReport.reviewedBy})
+                            </div>
+                            <div className={cn(
+                              "p-6 rounded-2xl border italic text-sm leading-relaxed",
+                              selectedReport.status === 'approved' ? "bg-green-50 border-green-100 text-green-700" : "bg-red-50 border-red-100 text-red-700"
+                            )}>
+                              {selectedReport.supervisorNotes}
                             </div>
                           </div>
                         )}
@@ -508,7 +524,7 @@ export default function ReportHistory() {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
-                              <User size={20} />
+                              <UserIcon size={20} />
                             </div>
                             <div>
                               <p className="font-bold text-slate-800 leading-none">{witness.name}</p>
@@ -540,7 +556,7 @@ export default function ReportHistory() {
                       <div key={i} className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm space-y-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
-                            <User size={20} />
+                            <UserIcon size={20} />
                           </div>
                           <div>
                             <p className="font-bold text-slate-800 leading-none">{sig.name}</p>
